@@ -33,7 +33,7 @@ class TestRegistry:
         reg.add_target("10.0.0.1", 9000)
         reg.add_target("10.0.0.2", 9000, ["tag1"])
         resolved = reg.resolve(["10.0.0.1", "10.0.0.2"])
-        assert resolved == [("10.0.0.1", 9000), ("10.0.0.2", 9000)]
+        assert resolved == ["10.0.0.1", "10.0.0.2"]
 
     def test_resolve_tag(self, tmp_path):
         reg = Registry(str(tmp_path / "t.db"))
@@ -41,19 +41,19 @@ class TestRegistry:
         reg.add_target("10.0.0.2", 9000, ["web"])
         resolved = reg.resolve(["@web"])
         assert len(resolved) == 2
-        assert ("10.0.0.1", 9000) in resolved
+        assert "10.0.0.1" in resolved
 
     def test_resolve_mixed(self, tmp_path):
         reg = Registry(str(tmp_path / "t.db"))
         reg.add_target("10.0.0.1", 9000, ["web"])
         resolved = reg.resolve(["@web", "10.0.0.2:9090", "10.0.0.3"])
-        assert resolved == [("10.0.0.1", 9000), ("10.0.0.2", 9090), ("10.0.0.3", 9000)]
+        assert resolved == ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
 
     def test_resolve_unknown_tag_skipped(self, tmp_path):
         reg = Registry(str(tmp_path / "t.db"))
         reg.add_target("10.0.0.1", 9000, ["web"])
         resolved = reg.resolve(["@unknown", "10.0.0.1"])
-        assert resolved == [("10.0.0.1", 9000)]
+        assert resolved == ["10.0.0.1"]
 
     def test_unique_constraint(self, tmp_path):
         reg = Registry(str(tmp_path / "t.db"))

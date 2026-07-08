@@ -70,27 +70,26 @@ class Registry:
                 for r in rows
             ]
 
-    def resolve(self, targets: list[str]) -> list[tuple[str, int]]:
-        """展开 @tag 和 host:port -> list[(host,port)]。
-        裸 IP -> (ip, 9000)。unknown @tag 静默跳过。
-        """
-        resolved: list[tuple[str, int]] = []
+    def resolve(self, targets: list[str]) -> list[str]:
+        """展开 @tag -> IPs。裸 IP / host:port 原样返回(端口由工具的 port 参数控制,
+        注册表里的 port 仅记录,不在 resolve 时附加,避免与工具 port 参数冲突)。
+        unknown @tag 静默跳过。返回 list[str](纯 host)。"""
+        resolved: list[str] = []
         with self._lock:
             all_rows = self._conn.execute(
                 "SELECT host, port, tags FROM targets").fetchall()
-            tag_map: dict[str, list[tuple[str, int]]] = {}
+            tag_map: dict[str, list[str]] = {}
             for row in all_rows:
                 for t in json.loads(row[2]):
-                    tag_map.setdefault(t, []).append((row[0], row[1]))
+                    tag_map.setdefault(t, []).append(row[0])
         for item in targets:
             if item.startswith("@"):
-                entries = tag_map.get(item[1:], [])
-                resolved.extend(entries)
-            elif ":" in item:
-                h, p_str = item.split(":", 1)
-                resolved.append((h, int(p_str)))
+                resolved.extend(tag_map.get(item[1:], []))
+            elif ":" in item and not item[item.index(":")+1:].isdigit() is False:
+                # host:port -> 取 host(端口由工具参数决定)
+                resolved.append(item.split(":", 1)[0])
             else:
-                resolved.append((item, 9000))
+                resolved.append(item)
         return resolved
 
     def close(self):
