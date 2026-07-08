@@ -105,7 +105,10 @@ class _Handler(socketserver.BaseRequestHandler):
                 self.request.sendall(b"24 ok")
                 continue
 
-            resp = self._on_data(datatype, data)
+            try:
+                resp = self._on_data(datatype, data)
+            except Exception:
+                break  # 模拟真实服务端 do() 异常->关连接(如缺文件 FileNotFoundError)
             if resp is not None:
                 self.request.sendall(resp)
 
@@ -124,6 +127,8 @@ class _Handler(socketserver.BaseRequestHandler):
         if datatype == 11:
             return json.dumps({"res": 1024}).encode()
         if datatype == 19:
+            # 注:真实 v1.3.9 handlers.py:265 用 REPO 但 line 8 未 import -> NameError 崩溃;
+            # mock 返回有效数据以测客户端收发,真实靶机需先修 socket_server handlers.py 的 import
             return json.dumps({"version": VERSION, "repo": "mock",
                                "latest_version": VERSION, "has_upgrade": False}).encode()
         if datatype == 5:
@@ -144,9 +149,8 @@ class _Handler(socketserver.BaseRequestHandler):
             return struct.pack("i", len(res)) + res
         if datatype == 3:
             # 文件下载:filepath 由 21 设置(同 test_e2e.py:360-361);payload 仅 {"gzip":bool}
-            if not os.path.isfile(self.filepath):
-                # 真实服务端 FileNotFoundError->关连接;mock 返回零长度帧避免客户端 _recv_n 阻塞
-                return struct.pack("<Q", 0) + b""
+            # 缺文件 open() 抛 FileNotFoundError(同真实 handlers.py:65)-> handle() except ->
+            # 关连接,客户端 recv_file_response 收 ConnectionError(对齐真实服务端)
             content = open(self.filepath, "rb").read()
             if json.loads(data).get("gzip"):
                 content = _compress(content)

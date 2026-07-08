@@ -47,3 +47,19 @@ def test_acquire_connect_failure_no_leak(mock_server):
     # 无修复:_inuse 会累积到 5(池满,后续 acquire 永久阻塞);有修复:_inuse 归 0
     assert p._inuse == 0
     p.close_all()
+
+
+def test_acquire_socket_timeout_propagated(mock_server):
+    # warning 回归:用户 batch timeout 应传到 SocketServerClient,约束 connect+recv,而非只设 read
+    p = TargetPool(mock_server.host, mock_server.port)
+    c = p.acquire(timeout=5, socket_timeout=7)
+    assert c.timeout == 7
+    p.release(c)
+    # 经 batch 路径:batch(timeout=9) -> _run_one -> acquire(socket_timeout=9)
+    sched = Scheduler()
+    sched.batch([mock_server.host], lambda c: None,
+                port=mock_server.port, timeout=9)
+    pool = sched.get_pool(mock_server.host, mock_server.port)
+    pc = pool._idle[-1]
+    assert pc.client.timeout == 9
+    pool.close_all()

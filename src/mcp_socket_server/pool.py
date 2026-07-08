@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from .socket_client import SocketServerClient
+from .socket_client import DEFAULT_TIMEOUT, SocketServerClient
 
 logger = logging.getLogger(__name__)
 MAX_CONN_PER_TARGET = 5
@@ -39,26 +39,37 @@ class TargetPool:
         self._inuse = 0
         self._cond = threading.Condition(threading.Lock())
 
-    def acquire(self, timeout: float = BORROW_TIMEOUT) -> SocketServerClient:
+    def acquire(self, timeout: float = BORROW_TIMEOUT,
+                socket_timeout: int = DEFAULT_TIMEOUT) -> SocketServerClient:
         deadline = time.time() + timeout
+        expired: list[SocketServerClient] = []
+        reuse: Optional[SocketServerClient] = None
         with self._cond:
             while self._inuse >= MAX_CONN_PER_TARGET:
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     raise TimeoutError(f"靶机 {self.host} 连接池满,等待超时")
                 self._cond.wait(remaining)
-            # 复用空闲连接(未超时)
+            # 复用空闲连接(未超时);超时的收集到锁外关闭(避免持锁 I/O)
             now = time.time()
             while self._idle:
                 pc = self._idle.pop()
                 if now - pc.last_used > IDLE_TIMEOUT:
-                    pc.client.close()
+                    expired.append(pc.client)
                     continue
-                self._inuse += 1
-                return pc.client
+                reuse = pc.client
+                break
             self._inuse += 1
-        # 新建连接(锁外):失败必须递减 _inuse,否则池计数泄漏致永久耗尽
-        client = SocketServerClient(self.host, self.port)
+        for c in expired:
+            try:
+                c.close()
+            except OSError:
+                pass
+        if reuse is not None:
+            return reuse
+        # 新建连接(锁外):socket_timeout 同时约束 connect 与后续 recv/send;
+        # 失败必须递减 _inuse,否则池计数泄漏致永久耗尽
+        client = SocketServerClient(self.host, self.port, timeout=socket_timeout)
         try:
             client.connect()
         except Exception:
@@ -134,10 +145,9 @@ class Scheduler:
 
     def _run_one(self, pool: TargetPool, host: str,
                  fn: Callable[[SocketServerClient], object], timeout: float) -> object:
-        client = pool.acquire()
+        client = pool.acquire(socket_timeout=int(timeout))
         healthy = True
         try:
-            client.timeout = int(timeout)
             return fn(client)
         except Exception:
             healthy = False
