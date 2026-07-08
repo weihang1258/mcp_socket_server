@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-socket-server"
+version = "0.1.0"
+description = "MCP server bridging LLM platforms to socket_server targets (batch command/capture/boce)"
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    "mcp>=1.0",
+    "anyio>=4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]
+
+[project.scripts]
+mcp-socket-server = "mcp_socket_server.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
