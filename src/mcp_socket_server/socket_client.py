@@ -137,3 +137,45 @@ class SocketServerClient:
     def recv_ok(self) -> bytes:
         """b'ok'/b'error':15/172/173。"""
         return self._recv_until_timeout()
+
+    # ===== 只读便捷方法 =====
+    def version(self) -> str:
+        """datatype 14"""
+        self._send(14)
+        return json.loads(self.recv_text_response().decode("utf-8", "replace"))
+
+    def isfile(self, path: str) -> bool:
+        """datatype 7:payload {"file": path}(字段名对齐 netutils.isfile(file))"""
+        self._send(7, json.dumps({"file": path}).encode())
+        return json.loads(self.recv_text_response().decode("utf-8", "replace")).get("res", False)
+
+    def isdir(self, path: str) -> bool:
+        """datatype 8:payload {"dir": path}(字段名对齐 netutils.isdir(dir))"""
+        self._send(8, json.dumps({"dir": path}).encode())
+        return json.loads(self.recv_text_response().decode("utf-8", "replace")).get("res", False)
+
+    def routeinfo(self) -> dict:
+        """datatype 4:无 payload"""
+        self._send(4)
+        return json.loads(self.recv_text_response().decode("utf-8", "replace"))
+
+    def command_exists(self, cmd: str) -> bool:
+        """datatype 18:payload {"cmd": cmd}(只读路径,不暴露 install_cmd)"""
+        self._send(18, json.dumps({"cmd": cmd}).encode())
+        return json.loads(self.recv_text_response().decode("utf-8", "replace")).get("res", False)
+
+    def filesize(self, path: str) -> int:
+        """datatype 11:payload {"path": path}"""
+        self._send(11, json.dumps({"path": path}).encode())
+        return json.loads(self.recv_text_response().decode("utf-8", "replace")).get("res", 0)
+
+    def version_detail(self) -> dict:
+        """datatype 19。注:handlers.py v1.3.9 因 REPO 未 import(line 8)而 NameError,
+        线上未修则本调用失败(连接被服务端关闭)。"""
+        self._send(19)
+        return json.loads(self.recv_text_response().decode("utf-8", "replace"))
+
+    def pcap_flow_extract(self, pcap_dir: str) -> list:
+        """datatype 200:payload {"pcap_dir": pcap_dir} -> 方向化五元组流(长度前缀 JSON)"""
+        self._send(200, json.dumps({"pcap_dir": pcap_dir}).encode())
+        return self.recv_lenprefixed_json()

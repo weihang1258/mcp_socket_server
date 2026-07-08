@@ -41,3 +41,20 @@ def test_recv_file_response_and_upload(mock_server, tmp_path):
     n, body = c.recv_file_response()
     assert n == len(content) and body == content
     c.close()
+
+
+def test_read_methods(mock_server, tmp_path):
+    f = tmp_path / "x.txt"
+    f.write_text("abc")
+    c = SocketServerClient(mock_server.host, mock_server.port)
+    c.connect()
+    assert c.version() == "1.3.9-mock"
+    assert c.isfile(str(f)) is True
+    assert c.isdir(str(tmp_path)) is True
+    assert isinstance(c.routeinfo(), dict)
+    assert c.command_exists("ls") is True
+    assert c.filesize(str(f)) == 1024  # mock 固定值
+    assert c.version_detail()["version"] == "1.3.9-mock"
+    flows = c.pcap_flow_extract("/some/dir")
+    assert flows[0]["protoType"] == 1
+    c.close()
