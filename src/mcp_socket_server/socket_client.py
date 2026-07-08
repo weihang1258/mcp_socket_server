@@ -7,6 +7,7 @@
 ⚠️ 权威协议来源（socket_server 仓库）：
   - 帧格式 + send_request/recv_* 逻辑：socket_server/test_e2e.py
   - datatype 处理 + 参数：socket_server/socket_server/handlers.py 的 do()
+  - 每个 datatype 的参数/响应/示例：socket_server/docs/api-guide.md
 
 本模块源自 test_e2e.py 客户端部分，必须与之字节级一致。
 socket_server 协议变更时同步更新本模块。

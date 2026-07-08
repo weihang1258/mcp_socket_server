@@ -2,8 +2,12 @@
 
 ⚠️ 权威协议来源（socket_server 仓库，勿在此手抄臆造）：
   - datatype 编号 + 参数 JSON 字段：socket_server/socket_server/handlers.py 的 do() 函数
+  - 每个 datatype 的参数/响应/示例：socket_server/docs/api-guide.md（查"type X 是什么"先看这）
   - 协议帧 + 收发：socket_server/test_e2e.py
   - datatype 表（含锁类/并发/危险标记）：socket_server/docs/mcp-integration.md
+
+特殊：文件上传 21->22->23->24 是四步握手，在 protocol.py 协议层处理
+（不在 do()），必须同一连接完成。详见 api-guide.md "文件上传流程"。
 
 本表从上述来源派生。socket_server 协议变更时，按 docs/mcp-integration.md
 第 8 节"协议演进流程"同步本表 + socket_client.py。加新命令只改本表。

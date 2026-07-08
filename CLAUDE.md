@@ -14,9 +14,15 @@ This project does **NOT** own the socket_server protocol. It is a consumer. The 
 |---|---|
 | Change `commands.py` (datatype numbers, params, lock classes) | `socket_server/handlers.py` `do()` function - authoritative datatype→handler+param mapping |
 | Change `socket_client.py` (frame format, send/recv) | `socket_server/test_e2e.py` - authoritative frame + `send_request`/`recv_*` logic. Must stay byte-level identical |
+| Look up any datatype's params/response/example | `socket_server/docs/api-guide.md` - per-datatype param + response + example table. **查 "type X 是什么/参数/示例" 先看这里** |
 | Design tools / concurrency rules | `socket_server/docs/mcp-integration.md` - datatype table with lock-class/concurrency/danger markings |
 
-**Never invent datatype numbers or param field names from memory.** Always derive from `handlers.py`. The `commands.py` and `socket_client.py` headers pin these sources.
+**Never invent datatype numbers or param field names from memory.** Always derive from `handlers.py` / `api-guide.md`. The `commands.py` and `socket_client.py` headers pin these sources.
+
+### 特殊协议（易踩坑）
+- **文件上传是 21->22->23->24 四步握手**（非单个 datatype），在 `socket_server/protocol.py` 协议层处理（不在 `handlers.py` 的 `do()`），**必须同一 TCP 连接完成**。`file_upload` 工具需独占连接，连接池"一连接一请求"假设在此不成立。详见 `api-guide.md` "文件上传流程"。
+- **文件下载 type 3** 路径走 `kwargs["filepath"]`（非 payload 的 `path`），响应是 `[8B 长度 Q][文件内容]`。
+- **scapy 抓包 121/122/123 已弃用**，MCP 层勿暴露。业务用 type 5/6（tcpdump 命令行）。
 
 ## Sync Rule (prevent drift)
 
