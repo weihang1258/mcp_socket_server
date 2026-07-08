@@ -179,3 +179,75 @@ class SocketServerClient:
         """datatype 200:payload {"pcap_dir": pcap_dir} -> 方向化五元组流(长度前缀 JSON)"""
         self._send(200, json.dumps({"pcap_dir": pcap_dir}).encode())
         return self.recv_lenprefixed_json()
+
+    # ===== 写方法 =====
+    def cmd_exec(self, args: str, cwd: str = None, env: dict = None,
+                 wait: bool = True) -> dict:
+        """datatype 1:payload {"args","cwd?","env?","wait?"} -> gzip JSON {code,stdout,stderr}。
+        wait=False 为 fire-and-forget,返回 None。"""
+        payload = {"args": args, "wait": wait}
+        if cwd is not None:
+            payload["cwd"] = cwd
+        if env is not None:
+            payload["env"] = env
+        self._send(1, json.dumps(payload).encode())
+        return self.recv_gzip_response()
+
+    def capture_start(self, eth: str = None, path: str = None,
+                      extended: str = "", single_queue: bool = True) -> bool:
+        """datatype 5:payload {"eth?","path?","extended?","single_queue?"}。
+        eth 为空时服务端用默认网卡(同 routeinfo 默认路由)。"""
+        payload = {"extended": extended, "single_queue": single_queue}
+        if eth is not None:
+            payload["eth"] = eth
+        if path is not None:
+            payload["path"] = path
+        self._send(5, json.dumps(payload).encode())
+        return json.loads(self.recv_text_response().decode("utf-8", "replace")).get("res", False)
+
+    def capture_stop(self, path: str) -> bool:
+        """datatype 6:payload {"path"}。"""
+        self._send(6, json.dumps({"path": path}).encode())
+        return json.loads(self.recv_text_response().decode("utf-8", "replace")).get("res", False)
+
+    def boce_run(self, url: str, count: int = 1, interval: int = 0,
+                 thread_count: int = 1, timeout: int = 3,
+                 mode: str = "封堵", chromium_path: str = None) -> dict:
+        """datatype 131:payload {"url","count?","interval?","thread_count?","timeout?",
+        "mode?","chromium_path?"}。响应 [4B len][json],返回 {total,success,fail,...}。"""
+        payload = {"url": url, "count": count, "interval": interval,
+                   "thread_count": thread_count, "timeout": timeout, "mode": mode}
+        if chromium_path is not None:
+            payload["chromium_path"] = chromium_path
+        self._send(131, json.dumps(payload).encode())
+        return self.recv_lenprefixed_json()
+
+    def file_upload(self, remote_path: str, content: bytes,
+                    use_gzip: bool = False) -> bool:
+        """文件上传 21->22->23->24 多步握手,单持久连接。
+        21{"filepath","gzip"}->"21 ok";22[8B <Q len]->"22 ok";
+        23[4B len][content] 无 datatype->"23 ok";24->"24 ok"。"""
+        raw = compress_gzip(content) if use_gzip else content
+        self._send(21, json.dumps({"filepath": remote_path, "gzip": use_gzip}).encode())
+        if self.recv_inline_text() != b"21 ok":
+            return False
+        self._send(22, struct.pack("<Q", len(raw)))
+        if self.recv_inline_text() != b"22 ok":
+            return False
+        self._send_raw(raw)  # 23: 无 datatype 字段,_send_raw 自加 [4B len] 前缀
+        if self.recv_inline_text() != b"23 ok":
+            return False
+        self._send(24, b"")
+        return self.recv_inline_text() == b"24 ok"
+
+    def file_download(self, remote_path: str, use_gzip: bool = False) -> bytes:
+        """文件下载 21->3,单持久连接。21 先设 filepath(连接状态),3 读 {"gzip":bool}。
+        返回文件内容字节。"""
+        self._send(21, json.dumps({"filepath": remote_path, "gzip": use_gzip}).encode())
+        if self.recv_inline_text() != b"21 ok":
+            raise ConnectionError("download: 21 handshake failed")
+        self._send(3, json.dumps({"gzip": use_gzip}).encode())
+        n, body = self.recv_file_response()
+        if use_gzip:
+            body = decompress_gzip(body)
+        return body

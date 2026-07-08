@@ -13,8 +13,9 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 from .socket_client import DEFAULT_TIMEOUT, SocketServerClient
 
@@ -142,6 +143,25 @@ class Scheduler:
                 logger.warning(f"靶机 {host} 执行失败: {e}")
                 results.append(TargetResult(target=host, ok=False, error=str(e)))
         return results
+
+    @contextmanager
+    def session(self, host: str, port: int = 9000, timeout: float = 30) -> Iterator[SocketServerClient]:
+        """借出独占连接用于多步操作(文件上传/下载)。context manager。
+
+        用法:
+            with sched.session(host, port) as client:
+                client.file_upload(remote, content)
+        """
+        pool = self.get_pool(host, port)
+        client = pool.acquire(socket_timeout=int(timeout))
+        healthy = True
+        try:
+            yield client
+        except Exception:
+            healthy = False
+            raise
+        finally:
+            pool.release(client, healthy)
 
     def _run_one(self, pool: TargetPool, host: str,
                  fn: Callable[[SocketServerClient], object], timeout: float) -> object:
