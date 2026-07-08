@@ -16,6 +16,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 mcp = FastMCP("mcp-socket-server")
 
 
+@mcp.tool()
+def list_targets() -> dict:
+    """列出已注册的靶机(占位,Plan 2 接 registry/SQLite)。"""
+    return {"targets": [], "note": "靶机注册表待接入(Plan 2)"}
+
+
 def init_server(cfg) -> None:
     """Plan 2 接 registry/audit/locks。本期占位。"""
     logger.info(f"init_server: db={cfg.db_path} bind={cfg.host}:{cfg.port} "
