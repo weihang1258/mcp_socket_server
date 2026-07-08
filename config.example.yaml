@@ -1,0 +1,19 @@
+# 配置示例 —— 复制此文件为 config.yaml 修改后使用
+
+bind:
+  host: 0.0.0.0       # 监听地址（内网用 0.0.0.0，本机测试用 127.0.0.1）
+  port: 8080           # MCP Streamable HTTP 端口
+
+db_path: ./mcp_socket_server.db
+behind_proxy: false     # true 则审计源 IP 取 X-Forwarded-For
+audit_retention_days: 90
+download_dir: ./downloads
+
+pool:
+  max_conn_per_target: 5
+  idle_timeout: 600       # 秒（10 分钟）
+  borrow_timeout: 10
+  max_global_concurrency: 50
+
+# 命令执行白名单（Plan 2 cmd_exec 上线时生效）
+cmd_exec_whitelist: []
