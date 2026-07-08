@@ -4,9 +4,12 @@
   - 长度 = datatype(4) + payload 字节数
   - payload 多为 JSON，文件类为二进制
 
-本模块源自 socket_server 仓库的 test_e2e.py 客户端逻辑。
-socket_server 协议变更时，同步更新本模块。权威定义见
-socket_server/docs/mcp-integration.md 的 datatype 表。
+⚠️ 权威协议来源（socket_server 仓库）：
+  - 帧格式 + send_request/recv_* 逻辑：socket_server/test_e2e.py
+  - datatype 处理 + 参数：socket_server/socket_server/handlers.py 的 do()
+
+本模块源自 test_e2e.py 客户端部分，必须与之字节级一致。
+socket_server 协议变更时同步更新本模块。
 """
 from __future__ import annotations
 
