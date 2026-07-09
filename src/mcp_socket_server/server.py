@@ -6,21 +6,17 @@
 from __future__ import annotations
 
 import logging
-import os
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import ExitStack
-from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .audit import get_audit
-from .commands import COMMANDS, Danger, LockClass
+from .commands import LockClass
 from .locks import LockConflict, LockManager, get_lock_manager
-from .pool import TargetPool, TargetResult, get_scheduler
+from .pool import TargetResult, get_scheduler
 from .registry import get_registry
 
 logger = logging.getLogger(__name__)
