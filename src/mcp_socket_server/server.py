@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import ExitStack
 from datetime import datetime, timezone
@@ -23,7 +24,21 @@ from .pool import TargetPool, TargetResult, get_scheduler
 from .registry import get_registry
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+
+def _setup_logging(level: str) -> None:
+    """统一配置根 logger + 关键子 logger。DEBUG 时让 socket_client/pool/uvicorn 也详细输出。"""
+    lvl = getattr(logging, level.upper(), logging.INFO)
+    fmt = "%(asctime)s.%(msecs)03d %(levelname)-5s [%(name)s] %(message)s"
+    logging.basicConfig(level=lvl, format=fmt, datefmt="%H:%M:%S", force=True)
+    # uvicorn access 日志在 DEBUG 下也开
+    if lvl <= logging.DEBUG:
+        logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+    else:
+        logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
+
+_setup_logging("INFO")  # 默认 INFO;init_server 会按 config 重设
 
 # 内网中央节点:关闭 DNS rebinding 保护(默认只放行 127.0.0.1/localhost,
 # 内网其它 IP 连过来会 421)。Plan 2 接 auth 后再收紧。
@@ -34,15 +49,19 @@ mcp = FastMCP("mcp-socket-server",
 _lock_manager: Optional[LockManager] = None
 _registry: Any = None
 _audit_logger: Any = None
+_cmd_whitelist: list[str] = []
 
 
 def init_server(cfg) -> None:
-    """初始化 registry/locks/audit。config.yaml 的 db_path 用于所有 SQLite。"""
-    global _lock_manager, _registry, _audit_logger
+    """初始化 registry/locks/audit + 日志级别。config.yaml 的 db_path 用于所有 SQLite。"""
+    global _lock_manager, _registry, _audit_logger, _cmd_whitelist
+    _setup_logging(cfg.log_level)
     _lock_manager = get_lock_manager()
     _registry = get_registry(cfg.db_path)
     _audit_logger = get_audit(cfg.db_path, cfg.audit_retention_days)
-    logger.info(f"init_server: db={cfg.db_path} bind={cfg.host}:{cfg.port}")
+    _cmd_whitelist = list(cfg.cmd_exec_whitelist or [])
+    logger.info(f"init_server: db={cfg.db_path} bind={cfg.host}:{cfg.port} "
+                f"log_level={cfg.log_level} whitelist={_cmd_whitelist}")
 
 
 def _resolve_targets(raw_targets: list[str]) -> list[str]:
@@ -74,22 +93,50 @@ def _run_batch(
     resolved = _resolve_targets(targets)
     sched = get_scheduler()
     results: list[TargetResult] = []
+    t_batch = time.monotonic()
+    logger.debug(f"_run_batch start: raw={targets} resolved={resolved} "
+                 f"port={port} lock={lock_class.value if lock_class else 'none'} "
+                 f"timeout={timeout}")
 
     def run_one(host_port: str) -> TargetResult:
+        t0 = time.monotonic()
         lock_mgr = _lock_manager
         key = ()
         if lock_key_fn:
             key = lock_key_fn(host_port)
+        # 1. 锁
         if lock_mgr is not None and lock_class != LockClass.NONE:
-            lock_mgr.acquire(host_port, lock_class, key)
+            try:
+                lock_mgr.acquire(host_port, lock_class, key)
+                logger.debug(f"[{host_port}] lock acquired: {lock_class.value} key={key} "
+                             f"({(time.monotonic()-t0)*1000:.0f}ms)")
+            except LockConflict as e:
+                logger.debug(f"[{host_port}] lock CONFLICT: {e}")
+                return TargetResult(target=host_port, ok=False, error=str(e))
+        # 2. 池借出
         pool = sched.get_pool(host_port, port)
-        client = pool.acquire(socket_timeout=int(timeout))
+        t_pool = time.monotonic()
+        try:
+            client = pool.acquire(socket_timeout=int(timeout))
+            logger.debug(f"[{host_port}] pool acquire ({(time.monotonic()-t_pool)*1000:.0f}ms) "
+                         f"sock_timeout={timeout}s")
+        except Exception as e:
+            logger.debug(f"[{host_port}] pool acquire FAILED: {e!r}")
+            if lock_mgr is not None and lock_class != LockClass.NONE:
+                lock_mgr.release(host_port, lock_class, key)
+            return TargetResult(target=host_port, ok=False, error=f"pool: {e}")
+        # 3. 执行
         healthy = True
         try:
+            t_fn = time.monotonic()
+            logger.debug(f"[{host_port}] fn start (cmd_exec/send)")
             data = fn(client)
+            logger.debug(f"[{host_port}] fn done ({(time.monotonic()-t_fn)*1000:.0f}ms) "
+                         f"data_type={type(data).__name__}")
             return TargetResult(target=host_port, ok=True, data=data)
         except Exception as e:
             healthy = False
+            logger.debug(f"[{host_port}] fn FAILED ({(time.monotonic()-t_fn)*1000:.0f}ms): {e!r}")
             return TargetResult(target=host_port, ok=False, error=str(e))
         finally:
             pool.release(client, healthy)
@@ -107,6 +154,9 @@ def _run_batch(
                 results.append(fut.result())
             except Exception as e:
                 results.append(TargetResult(target=futs[fut], ok=False, error=str(e)))
+
+    logger.debug(f"_run_batch done: ok={sum(1 for r in results if r.ok)}/"
+                 f"{len(results)} total={(time.monotonic()-t_batch)*1000:.0f}ms")
 
     # audit
     if audit_tool and _audit_logger is not None:
@@ -244,18 +294,16 @@ def pcap_flow_extract(targets: list[str], pcap_dir: str, port: int = 9000) -> di
 def cmd_exec(targets: list[str], args: str, cwd: str = "", env: dict | None = None,
              wait: bool = True, port: int = 9000) -> dict:
     """执行命令(datatype 1,SHELL/DANGER,白名单校验后转发)。"""
+    logger.info(f"cmd_exec CALLED: targets={targets} port={port} wait={wait} "
+                f"args={args[:120]!r}")
     # 白名单校验
-    whitelist = []
-    if _audit_logger is not None:
-        try:
-            whitelist = getattr(_audit_logger, "_cmd_whitelist", [])
-        except Exception:
-            pass
-    if whitelist:
-        if not any(args.strip().startswith(w) for w in whitelist):
+    if _cmd_whitelist:
+        if not any(args.strip().startswith(w) for w in _cmd_whitelist):
+            logger.info(f"cmd_exec REJECTED by whitelist (allowed={_cmd_whitelist})")
             return {"ok": 0, "failed": [{"target": t, "reason": f"命令不在白名单: {args}"}
                                          for t in targets],
                     "results": []}
+        logger.debug(f"cmd_exec whitelist OK (matched prefix)")
     resolved = _resolve_targets(targets)
 
     def run_one(client):

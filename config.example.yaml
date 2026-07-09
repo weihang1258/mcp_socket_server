@@ -8,6 +8,7 @@ db_path: ./mcp_socket_server.db
 behind_proxy: false     # true 则审计源 IP 取 X-Forwarded-For
 audit_retention_days: 90
 download_dir: ./downloads
+log_level: INFO         # INFO / DEBUG(DEBUG 时输出工具调用、锁、池、connect/send/recv 全链路日志)
 
 pool:
   max_conn_per_target: 5

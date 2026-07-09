@@ -21,7 +21,9 @@ def streamable_http_app(mcp):
 
 
 def run(mcp, cfg: Config) -> None:
-    """用 uvicorn 跑 Streamable HTTP。端点 /mcp。"""
+    """用 uvicorn 跑 Streamable HTTP。端点 /mcp。log_level 跟随 config(DEBUG 时开 access 日志)。"""
     app = mcp.streamable_http_app()
-    logger.info(f"MCP Streamable HTTP 监听 {cfg.host}:{cfg.port}/mcp")
-    uvicorn.run(app, host=cfg.host, port=cfg.port)
+    logger.info(f"MCP Streamable HTTP 监听 {cfg.host}:{cfg.port}/mcp (log_level={cfg.log_level})")
+    uvicorn.run(app, host=cfg.host, port=cfg.port,
+                log_level=cfg.log_level.lower(),
+                access_log=True)

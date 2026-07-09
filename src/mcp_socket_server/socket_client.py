@@ -43,8 +43,14 @@ class SocketServerClient:
             return
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(self.timeout)
-        s.connect((self.host, self.port))
+        logger.debug(f"connect start: {self.host}:{self.port} timeout={self.timeout}s")
+        try:
+            s.connect((self.host, self.port))
+        except Exception as e:
+            logger.debug(f"connect FAILED: {self.host}:{self.port} -> {e!r}")
+            raise
         self._sock = s
+        logger.debug(f"connect OK: {self.host}:{self.port} (fileno={s.fileno()})")
 
     def close(self) -> None:
         if self._sock is not None:
@@ -61,7 +67,9 @@ class SocketServerClient:
         # 重置 timeout:防止上一次 _recv_until_timeout 留下的 0.5s 短 timeout 泄漏到 send
         self._sock.settimeout(self.timeout)
         body = struct.pack("i", datatype) + payload
-        self._sock.sendall(struct.pack("i", len(body)) + body)
+        msg = struct.pack("i", len(body)) + body
+        logger.debug(f"_send dt={datatype} payload={len(payload)}B total={len(msg)}B -> {self.host}:{self.port}")
+        self._sock.sendall(msg)
 
     def _send_raw(self, msg: bytes) -> None:
         """发送裸帧 [4B len][content](用于文件上传 step 23,无 datatype 字段)"""
@@ -113,8 +121,11 @@ class SocketServerClient:
 
     def recv_gzip_response(self):
         """[4B len i][gzip json] 响应:1/16。返回解压后的对象。"""
+        logger.debug(f"recv_gzip start: {self.host}:{self.port}")
         n = struct.unpack("i", self._recv_n(4))[0]
+        logger.debug(f"recv_gzip: len prefix={n}")
         gz = self._recv_n(n)
+        logger.debug(f"recv_gzip: got {len(gz)}B gzip")
         return json.loads(decompress_gzip(gz))
 
     def recv_file_response(self, gzip_decompress: bool = False):
@@ -190,8 +201,11 @@ class SocketServerClient:
             payload["cwd"] = cwd
         if env is not None:
             payload["env"] = env
+        logger.debug(f"cmd_exec send: dt=1 args={args[:80]!r} wait={wait}")
         self._send(1, json.dumps(payload).encode())
-        return self.recv_gzip_response()
+        result = self.recv_gzip_response()
+        logger.debug(f"cmd_exec recv done: code={result.get('code') if isinstance(result, dict) else '?'}")
+        return result
 
     def capture_start(self, eth: str = None, path: str = None,
                       extended: str = "", single_queue: bool = True) -> bool:

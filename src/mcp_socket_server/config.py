@@ -14,6 +14,7 @@ DEFAULTS: dict[str, Any] = {
     "behind_proxy": False,
     "audit_retention_days": 90,
     "download_dir": "./downloads",
+    "log_level": "INFO",
     "pool": {"max_conn_per_target": 5, "idle_timeout": 600,
              "borrow_timeout": 10, "max_global_concurrency": 50},
     "cmd_exec_whitelist": [],
@@ -28,6 +29,7 @@ class Config:
     behind_proxy: bool
     audit_retention_days: int
     download_dir: str
+    log_level: str
     pool: dict
     cmd_exec_whitelist: list
 
@@ -52,9 +54,12 @@ def load_config(path: str | None = None) -> Config:
         data["bind"]["host"] = os.environ["MCP_BIND_HOST"]
     if os.getenv("MCP_BIND_PORT"):
         data["bind"]["port"] = int(os.environ["MCP_BIND_PORT"])
+    if os.getenv("MCP_LOG_LEVEL"):
+        data["log_level"] = os.environ["MCP_LOG_LEVEL"]
     b = data["bind"]
     return Config(host=b["host"], port=b["port"], db_path=data["db_path"],
                   behind_proxy=data["behind_proxy"],
                   audit_retention_days=data["audit_retention_days"],
-                  download_dir=data["download_dir"], pool=data["pool"],
+                  download_dir=data["download_dir"], log_level=data["log_level"],
+                  pool=data["pool"],
                   cmd_exec_whitelist=data["cmd_exec_whitelist"])
