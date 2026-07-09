@@ -9,14 +9,17 @@ description = "MCP server bridging LLM platforms to socket_server targets (batch
 requires-python = ">=3.10"
 readme = "README.md"
 dependencies = [
-    "mcp>=1.0",
+    "mcp>=1.8",
     "anyio>=4.0",
+    "pyyaml>=6.0",
+    "uvicorn>=0.30",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
+    "httpx>=0.27",
 ]
 
 [project.scripts]

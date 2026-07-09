@@ -8,7 +8,7 @@
 
 `mcp_socket_server` 是 MCP server,桥接 LLM 平台到 N 个 socket_server 靶机(每靶机 TCP :9000)。中央节点单实例,批量并行执行,带状态锁与审计。本项目是 socket_server 协议的**消费者**,不拥有协议;权威在 `/opt/socket_server`。
 
-**现状 0.1.0**:只读工具 `version_query`/`isfile`/`routeinfo` 跑通(靠 timeout 侥幸,非正确协议读取);`list_targets` 占位;状态锁未执行;无 auth/audit;仅 stdio。`commands.py` 与协议有偏差;`socket_client.py` 是 `test_e2e.py` 的**不完整镜像**(缺 per-datatype recv/gzip/文件传输/持久会话);`pool.py`「一连接一请求」模型**错误**。
+**现状 0.1.0**:只读工具 `version_query`/`isfile`/`routeinfo` 跑通(靠 timeout 侥幸,非正确协议读取);`list_targets` 占位;状态锁未执行;无 auth/audit;仅 stdio。`commands.py` 与协议有偏差;`socket_client.py` 是 `test_e2e.py` 的**不完整镜像**(缺 per-datatype recv/gzip/文件传输/持久会话);`pool.py` 用「读到关闭」recv 且无持久会话(无法做文件传输多步握手)、连接不复用。
 
 **业务脚本分析(2026-07-08)**:用户提供 6 个在用脚本(`tcpdump.py`/`socket_linux.py`/`webvisit.py`/`dpi.py`/`hengwei.py`/`dpi_constants.py`)。`socket_linux.py` 是**真正的生产协议客户端**(包全 datatype),证明真实业务面远大于原 spec,且推翻了 `socket_client`/`pool` 的地基假设(见 §2)。
 
@@ -77,7 +77,7 @@ src/mcp_socket_server/
 
 **发送帧**:`[4B len i][4B datatype i][payload]`(len = 4 + payload 字节),与 `test_e2e.py` `send_request` 一致。
 
-**持久会话**:一连接多轮往返(服务端 `protocol.py handle()` 循环)。`socket_client` 不在每次调用后关闭;由 `pool` 管理生命周期。**不再用「读到关闭」**。
+**recv 按 `test_e2e.py` recv_**(timeout 读可用字节,**非「读到关闭」**);**文件传输用持久会话**(单连接多步握手);简单 datatype 可复用连接(`close_after=False`,匹配 `socket_linux.py` 生产用法),close-after 亦正确(匹配 `test_e2e.py`)。
 
 **per-datatype 响应解析**(核心,按 `test_e2e.py` recv_*):
 
@@ -101,11 +101,11 @@ src/mcp_socket_server/
 
 ## 7. 连接池/会话重建(pool.py)
 
-- **持久会话 + 复用**:`TargetPool` 维护可复用连接;`acquire()` 借出已连接的 `SocketServerClient`(复用空闲或新建);`release()` 归还池(不关闭,记空闲时间)。空闲超时(`IDLE_TIMEOUT`)才关闭。
-- **多轮往返**:文件传输等在借出的同一连接上完成多步 send/recv,用完归还。
+- **持久会话(文件传输)**:文件上传/下载在借出的**同一连接**上完成多步 send/recv(21->22->23->24 / 21->3),用完归还。
+- **连接复用(可选优化)**:简单 datatype 可复用已连接的 `SocketServerClient`(`close_after=False`,匹配 `socket_linux.py`);`acquire()` 借出空闲或新建,`release()` 归还池(不关闭,记空闲时间),空闲超时(`IDLE_TIMEOUT`)才关闭。复用非必须(close-after 亦正确,匹配 `test_e2e.py`)。
 - **并发限流**:`MAX_CONN_PER_TARGET=5`、`MAX_GLOBAL_CONCURRENCY=50`。
-- **连接健康**:借出时若连接已断(服务端关闭/超时),丢弃重建。
-- 取代旧「acquire 总新建、release 总关闭」。
+- **连接健康**:借出时若连接已断,丢弃重建。
+- **recv 用 `test_e2e.py` recv_**(取代旧「读到关闭」)。
 
 ## 8. 请求数据流
 
@@ -154,7 +154,7 @@ SQLite 单文件(`db_path`),WAL,启动建表。写入用 `threading.Lock` 守护
 
 ## 11. 工具与协议层(server.py)
 
-**只读**(NONE/SAFE):`version_query`(14)、`isfile`(7)、`isdir`(8)、`routeinfo`(4)、`command_exists`(18,不暴露 `install_cmd`)、`filesize`(11)、`version_detail`(19)、`pcap_flow_extract`(200,返回 `[{pcap,srcIp,srcPort,destIp,destPort,protoType 1=TCP/2=UDP/3=SCTP/4=ICMP}]`)。
+**只读**(NONE/SAFE):`version_query`(14)、`isfile`(7)、`isdir`(8)、`routeinfo`(4)、`command_exists`(18,不暴露 `install_cmd`)、`filesize`(11)、`version_detail`(19)、`pcap_flow_extract(targets, pcap_dir)`(200,返回 `[{pcap,srcIp,srcPort,destIp,destPort,protoType 1=TCP/2=UDP/3=SCTP/4=ICMP}]`)。
 
 **写**:
 - `cmd_exec(targets, args, cwd?, env?, wait=True, returnall=False)`:datatype 1,SHELL/DANGER,**白名单**校验 `args` 后转发;响应 gzip 解析。`wait=False`=fire-and-forget;`returnall=True` 返回 `{code,stdout,stderr}`。
@@ -195,6 +195,7 @@ SQLite 单文件(`db_path`),WAL,启动建表。写入用 `threading.Lock` 守护
 - SYSTEM 类(version_switch/firewall/DPI)本期不实现。
 - 无 auth:依赖内网隔离;若内网有不可信节点需重新评估。
 - `python_cmd`(16 第二 RCE)、`tap_mirror`(SSH)、DPI 管理族、`socketserver_listener` 下期。
+- `version_detail`(19):`handlers.py` v1.3.9 中 `REPO` 未 import(L8 只 import `VERSION`,L265 用 `REPO`),datatype 19 可能 NameError;实现前验证线上 socket_server 是否已修,未修则降级(仅返回 version)或下期。
 - 简单 datatype 响应无长度前缀,持久连接下 recv 须按 `test_e2e.py` `recv_text_response` 实现(读至 JSON 可解析),勿用「读到关闭」。
 - 审计保留 90 天,启动清理。
 
