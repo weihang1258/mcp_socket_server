@@ -240,26 +240,40 @@ class SocketServerClient:
                     use_gzip: bool = False) -> bool:
         """文件上传 21->22->23->24 多步握手,单持久连接。
         21{"filepath","gzip"}->"21 ok";22[8B <Q len]->"22 ok";
-        23[4B len][content] 无 datatype->"23 ok";24->"24 ok"。"""
+        23[4B len][content] 无 datatype->"23 ok";24->"24 ok"。
+        任一步失败抛 ConnectionError,含步骤号 + 服务端实际响应(便于排障);
+        抛异常后 session 上下文标记连接不健康并丢弃,避免毒连接复用。"""
         raw = compress_gzip(content) if use_gzip else content
         self._send(21, json.dumps({"filepath": remote_path, "gzip": use_gzip}).encode())
-        if self.recv_inline_text() != b"21 ok":
-            return False
+        resp = self.recv_inline_text()
+        if resp != b"21 ok":
+            raise ConnectionError(
+                f"upload step1(21 filepath) failed: resp={resp!r}")
         self._send(22, struct.pack("<Q", len(raw)))
-        if self.recv_inline_text() != b"22 ok":
-            return False
+        resp = self.recv_inline_text()
+        if resp != b"22 ok":
+            raise ConnectionError(
+                f"upload step2(22 length={len(raw)}) failed: resp={resp!r}")
         self._send_raw(raw)  # 23: 无 datatype 字段,_send_raw 自加 [4B len] 前缀
-        if self.recv_inline_text() != b"23 ok":
-            return False
+        resp = self.recv_inline_text()
+        if resp != b"23 ok":
+            raise ConnectionError(
+                f"upload step3(23 content {len(raw)}B) failed: resp={resp!r}")
         self._send(24, b"")
-        return self.recv_inline_text() == b"24 ok"
+        resp = self.recv_inline_text()
+        if resp != b"24 ok":
+            raise ConnectionError(
+                f"upload step4(24 commit) failed: resp={resp!r}")
+        return True
 
     def file_download(self, remote_path: str, use_gzip: bool = False) -> bytes:
         """文件下载 21->3,单持久连接。21 先设 filepath(连接状态),3 读 {"gzip":bool}。
-        返回文件内容字节。"""
+        返回文件内容字节。21 步失败抛 ConnectionError(含服务端实际响应)。"""
         self._send(21, json.dumps({"filepath": remote_path, "gzip": use_gzip}).encode())
-        if self.recv_inline_text() != b"21 ok":
-            raise ConnectionError("download: 21 handshake failed")
+        resp = self.recv_inline_text()
+        if resp != b"21 ok":
+            raise ConnectionError(
+                f"download step1(21 filepath) failed: resp={resp!r}")
         self._send(3, json.dumps({"gzip": use_gzip}).encode())
         n, body = self.recv_file_response()
         if use_gzip:

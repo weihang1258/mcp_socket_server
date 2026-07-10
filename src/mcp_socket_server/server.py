@@ -164,7 +164,8 @@ def _run_batch(
                 audit_tool, params, outcomes,
                 ok_count=sum(1 for r in results if r.ok),
                 failed_count=sum(1 for r in results if not r.ok),
-                duration_ms=0, source_ip="internal",
+                duration_ms=int((time.monotonic() - t_batch) * 1000),
+                source_ip="internal",
             )
         except Exception:
             pass
@@ -335,6 +336,7 @@ def capture_start(targets: list[str], iface: str = "", path: str = "/home/tmp/tm
 def capture_stop(targets: list[str], path: str = "/home/tmp/tmp.pcap",
                  port: int = 9000) -> dict:
     """停止 tcpdump 抓包(datatype 6)。释放 capture_start 持有的 CAPTURE(path) 锁。"""
+    t0 = time.monotonic()
     resolved = _resolve_targets(targets)
     sched = get_scheduler()
     results: list[TargetResult] = []
@@ -370,10 +372,12 @@ def capture_stop(targets: list[str], path: str = "/home/tmp/tmp.pcap",
     if _audit_logger is not None:
         try:
             _audit_logger.write("capture_stop", {"path": path},
-                                [{"target": r.target, "ok": r.ok} for r in results],
+                                [{"target": r.target, "ok": r.ok,
+                                  "error": getattr(r, "error", None)} for r in results],
                                 ok_count=sum(1 for r in results if r.ok),
                                 failed_count=sum(1 for r in results if not r.ok),
-                                duration_ms=0, source_ip="internal")
+                                duration_ms=int((time.monotonic() - t0) * 1000),
+                                source_ip="internal")
         except Exception:
             pass
 
@@ -405,9 +409,16 @@ def boce_run(targets: list[str], url: str, count: int = 1, interval: int = 0,
 @mcp.tool()
 def file_upload(targets: list[str], remote_path: str, content_b64: str,
                 use_gzip: bool = False, port: int = 9000) -> dict:
-    """上传文件(21->22->23->24 多步握手,FILE_IO 锁,独占连接)。"""
+    """上传文件(21->22->23->24 多步握手,FILE_IO 锁,独占连接)。
+    content_b64 为文件内容 base64;失败时 failed[].reason 含失败步骤 + 服务端响应。"""
     import base64
-    content = base64.b64decode(content_b64)
+    t0 = time.monotonic()
+    try:
+        content = base64.b64decode(content_b64)
+    except Exception as e:
+        return {"ok": 0,
+                "failed": [{"reason": f"content_b64 解码失败: {e}"}],
+                "results": []}
     resolved = _resolve_targets(targets)
     sched = get_scheduler()
     results: list[TargetResult] = []
@@ -418,8 +429,8 @@ def file_upload(targets: list[str], remote_path: str, content_b64: str,
             lock_mgr.acquire(host_port, LockClass.FILE_IO)
         try:
             with sched.session(host_port, port) as client:
-                ok = client.file_upload(remote_path, content, use_gzip=use_gzip)
-            return TargetResult(target=host_port, ok=ok,
+                client.file_upload(remote_path, content, use_gzip=use_gzip)
+            return TargetResult(target=host_port, ok=True,
                                 data={"remote_path": remote_path, "size": len(content)})
         except Exception as e:
             return TargetResult(target=host_port, ok=False, error=str(e))
@@ -444,10 +455,12 @@ def file_upload(targets: list[str], remote_path: str, content_b64: str,
             _audit_logger.write("file_upload",
                                 {"remote_path": remote_path, "size": len(content),
                                  "use_gzip": use_gzip},
-                                [{"target": r.target, "ok": r.ok} for r in results],
+                                [{"target": r.target, "ok": r.ok,
+                                  "error": getattr(r, "error", None)} for r in results],
                                 ok_count=sum(1 for r in results if r.ok),
                                 failed_count=sum(1 for r in results if not r.ok),
-                                duration_ms=0, source_ip="internal")
+                                duration_ms=int((time.monotonic() - t0) * 1000),
+                                source_ip="internal")
         except Exception:
             pass
 
@@ -461,6 +474,7 @@ def file_download(targets: list[str], path: str, use_gzip: bool = False,
                   port: int = 9000) -> dict:
     """下载文件(21->3 多步握手,FILE_IO 锁)。返回 {local_path,size,sha256}。"""
     import base64, hashlib, os, tempfile
+    t0 = time.monotonic()
     resolved = _resolve_targets(targets)
     sched = get_scheduler()
     results: list[TargetResult] = []
@@ -504,10 +518,12 @@ def file_download(targets: list[str], path: str, use_gzip: bool = False,
     if _audit_logger is not None:
         try:
             _audit_logger.write("file_download", {"path": path, "use_gzip": use_gzip},
-                                [{"target": r.target, "ok": r.ok} for r in results],
+                                [{"target": r.target, "ok": r.ok,
+                                  "error": getattr(r, "error", None)} for r in results],
                                 ok_count=sum(1 for r in results if r.ok),
                                 failed_count=sum(1 for r in results if not r.ok),
-                                duration_ms=0, source_ip="internal")
+                                duration_ms=int((time.monotonic() - t0) * 1000),
+                                source_ip="internal")
         except Exception:
             pass
 
