@@ -8,7 +8,9 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable, Optional
+from typing import Annotated, Any, Callable, Optional
+
+from pydantic import Field
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -20,6 +22,12 @@ from .pool import TargetResult, get_scheduler
 from .registry import get_registry
 
 logger = logging.getLogger(__name__)
+
+# 各工具通用的可选 description 参数:调用方(LLM)填"本次调用的目的",
+# 随调用回传展示给最终用户(参照 Claude Code Task 工具先例)。
+# 仅透传,业务逻辑忽略;不入 required,旧调用方不带该参数不受影响。
+CallDescription = Annotated[str, Field(
+    description="一句话说明本次调用的目的（将展示给用户），不超过 50 字")]
 
 
 def _setup_logging(level: str) -> None:
@@ -178,7 +186,7 @@ def _run_batch(
 # ==================== 只读工具 ====================
 
 @mcp.tool()
-def list_targets() -> dict:
+def list_targets(description: CallDescription = "") -> dict:
     """列出已注册的靶机。"""
     if _registry is None:
         return {"targets": [], "note": "注册表未初始化(需调 init_server)"}
@@ -187,7 +195,7 @@ def list_targets() -> dict:
 
 @mcp.tool()
 def add_target(host: str, port: int = 9000, tags: list[str] | None = None,
-               note: str = "") -> dict:
+               note: str = "", description: CallDescription = "") -> dict:
     """注册新靶机。tags 用于 @tag 选机。"""
     if _registry is None:
         return {"ok": False, "error": "注册表未初始化"}
@@ -195,7 +203,8 @@ def add_target(host: str, port: int = 9000, tags: list[str] | None = None,
 
 
 @mcp.tool()
-def remove_target(host: str, port: int = 9000) -> dict:
+def remove_target(host: str, port: int = 9000,
+                  description: CallDescription = "") -> dict:
     """移除靶机(有活跃锁时拒绝)。"""
     if _registry is None:
         return {"ok": False, "error": "注册表未初始化"}
@@ -205,7 +214,8 @@ def remove_target(host: str, port: int = 9000) -> dict:
 
 
 @mcp.tool()
-def version_query(targets: list[str], port: int = 9000) -> dict:
+def version_query(targets: list[str], port: int = 9000,
+                  description: CallDescription = "") -> dict:
     """查询多台靶机 socket_server 版本号(datatype 14,只读)。"""
     resolved = _resolve_targets(targets)
     results = get_scheduler().batch(resolved, lambda c: c.version(), port=port, timeout=15)
@@ -215,7 +225,8 @@ def version_query(targets: list[str], port: int = 9000) -> dict:
 
 
 @mcp.tool()
-def isfile(targets: list[str], path: str, port: int = 9000) -> dict:
+def isfile(targets: list[str], path: str, port: int = 9000,
+           description: CallDescription = "") -> dict:
     """检查文件是否存在(datatype 7,只读)。"""
     resolved = _resolve_targets(targets)
     results = get_scheduler().batch(resolved, lambda c: c.isfile(path), port=port, timeout=15)
@@ -225,7 +236,8 @@ def isfile(targets: list[str], path: str, port: int = 9000) -> dict:
 
 
 @mcp.tool()
-def isdir(targets: list[str], path: str, port: int = 9000) -> dict:
+def isdir(targets: list[str], path: str, port: int = 9000,
+          description: CallDescription = "") -> dict:
     """检查目录是否存在(datatype 8,只读)。"""
     resolved = _resolve_targets(targets)
     results = get_scheduler().batch(resolved, lambda c: c.isdir(path), port=port, timeout=15)
@@ -235,7 +247,8 @@ def isdir(targets: list[str], path: str, port: int = 9000) -> dict:
 
 
 @mcp.tool()
-def routeinfo(targets: list[str], port: int = 9000) -> dict:
+def routeinfo(targets: list[str], port: int = 9000,
+              description: CallDescription = "") -> dict:
     """查询路由信息(datatype 4,只读)。"""
     resolved = _resolve_targets(targets)
     results = get_scheduler().batch(resolved, lambda c: c.routeinfo(), port=port, timeout=15)
@@ -245,7 +258,8 @@ def routeinfo(targets: list[str], port: int = 9000) -> dict:
 
 
 @mcp.tool()
-def command_exists(targets: list[str], cmd: str, port: int = 9000) -> dict:
+def command_exists(targets: list[str], cmd: str, port: int = 9000,
+                   description: CallDescription = "") -> dict:
     """检查命令是否存在(datatype 18,只读,不自动安装)。"""
     resolved = _resolve_targets(targets)
     results = get_scheduler().batch(resolved, lambda c: c.command_exists(cmd), port=port, timeout=15)
@@ -255,7 +269,8 @@ def command_exists(targets: list[str], cmd: str, port: int = 9000) -> dict:
 
 
 @mcp.tool()
-def filesize(targets: list[str], path: str, port: int = 9000) -> dict:
+def filesize(targets: list[str], path: str, port: int = 9000,
+             description: CallDescription = "") -> dict:
     """查询文件字节数(datatype 11,只读)。"""
     resolved = _resolve_targets(targets)
     results = get_scheduler().batch(resolved, lambda c: c.filesize(path), port=port, timeout=15)
@@ -265,7 +280,8 @@ def filesize(targets: list[str], path: str, port: int = 9000) -> dict:
 
 
 @mcp.tool()
-def version_detail(targets: list[str], port: int = 9000) -> dict:
+def version_detail(targets: list[str], port: int = 9000,
+                   description: CallDescription = "") -> dict:
     """查询服务端版本详情(datatype 19,只读;v1.3.9 可能 REPO bug,失败见 failed)。"""
     resolved = _resolve_targets(targets)
     results = get_scheduler().batch(resolved, lambda c: c.version_detail(), port=port, timeout=15)
@@ -275,7 +291,8 @@ def version_detail(targets: list[str], port: int = 9000) -> dict:
 
 
 @mcp.tool()
-def pcap_flow_extract(targets: list[str], pcap_dir: str, port: int = 9000) -> dict:
+def pcap_flow_extract(targets: list[str], pcap_dir: str, port: int = 9000,
+                      description: CallDescription = "") -> dict:
     """提取 pcap 五元组流(datatype 200,只读)。"""
     resolved = _resolve_targets(targets)
     results = get_scheduler().batch(resolved, lambda c: c.pcap_flow_extract(pcap_dir),
@@ -289,7 +306,8 @@ def pcap_flow_extract(targets: list[str], pcap_dir: str, port: int = 9000) -> di
 
 @mcp.tool()
 def cmd_exec(targets: list[str], args: str, cwd: str = "", env: dict | None = None,
-             wait: bool = True, port: int = 9000) -> dict:
+             wait: bool = True, port: int = 9000,
+             description: CallDescription = "") -> dict:
     """执行命令(datatype 1,SHELL/DANGER,白名单校验后转发)。"""
     logger.info(f"cmd_exec CALLED: targets={targets} port={port} wait={wait} "
                 f"args={args[:120]!r}")
@@ -315,7 +333,8 @@ def cmd_exec(targets: list[str], args: str, cwd: str = "", env: dict | None = No
 
 @mcp.tool()
 def capture_start(targets: list[str], iface: str = "", path: str = "/home/tmp/tmp.pcap",
-                  extended: str = "", single_queue: bool = True, port: int = 9000) -> dict:
+                  extended: str = "", single_queue: bool = True, port: int = 9000,
+                  description: CallDescription = "") -> dict:
     """开始 tcpdump 抓包(datatype 5,CAPTURE 持锁)。iface 空则取 routeinfo 默认网卡。"""
     resolved = _resolve_targets(targets)
 
@@ -334,7 +353,7 @@ def capture_start(targets: list[str], iface: str = "", path: str = "/home/tmp/tm
 
 @mcp.tool()
 def capture_stop(targets: list[str], path: str = "/home/tmp/tmp.pcap",
-                 port: int = 9000) -> dict:
+                 port: int = 9000, description: CallDescription = "") -> dict:
     """停止 tcpdump 抓包(datatype 6)。释放 capture_start 持有的 CAPTURE(path) 锁。"""
     t0 = time.monotonic()
     resolved = _resolve_targets(targets)
@@ -389,7 +408,8 @@ def capture_stop(targets: list[str], path: str = "/home/tmp/tmp.pcap",
 @mcp.tool()
 def boce_run(targets: list[str], url: str, count: int = 1, interval: int = 0,
              thread_count: int = 1, timeout: int = 3, mode: str = "封堵",
-             chromium_path: str = "", port: int = 9000) -> dict:
+             chromium_path: str = "", port: int = 9000,
+             description: CallDescription = "") -> dict:
     """拨测(datatype 131,BROWSER)。"""
     resolved = _resolve_targets(targets)
 
@@ -408,7 +428,8 @@ def boce_run(targets: list[str], url: str, count: int = 1, interval: int = 0,
 
 @mcp.tool()
 def file_upload(targets: list[str], remote_path: str, content_b64: str,
-                use_gzip: bool = False, port: int = 9000) -> dict:
+                use_gzip: bool = False, port: int = 9000,
+                description: CallDescription = "") -> dict:
     """上传文件(21->22->23->24 多步握手,FILE_IO 锁,独占连接)。
     content_b64 为文件内容 base64;失败时 failed[].reason 含失败步骤 + 服务端响应。"""
     import base64
@@ -471,7 +492,7 @@ def file_upload(targets: list[str], remote_path: str, content_b64: str,
 
 @mcp.tool()
 def file_download(targets: list[str], path: str, use_gzip: bool = False,
-                  port: int = 9000) -> dict:
+                  port: int = 9000, description: CallDescription = "") -> dict:
     """下载文件(21->3 多步握手,FILE_IO 锁)。返回 {local_path,size,sha256}。"""
     import base64, hashlib, os, tempfile
     t0 = time.monotonic()
