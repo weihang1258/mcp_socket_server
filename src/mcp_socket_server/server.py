@@ -417,6 +417,8 @@ def socket_listen(targets: list[str], action: str, listen_port: int = 30001,
                 "failed": [{"target": t, "reason": "save 动作需要 file 参数"}
                            for t in targets],
                 "results": []}
+    if action not in ("start", "clean", "save", "fetch"):
+        return {"ok": 0, "failed": [{"target": t, "reason": f"未知 action: {action}"} for t in targets], "results": []}
     resolved = _resolve_targets(targets)
 
     def run_one(client):

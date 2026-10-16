@@ -232,7 +232,7 @@ for r in c.execute('SELECT ts,tool,ok_count,failed_count FROM audit_log ORDER BY
 - URL:`http://10.12.131.81:8080/mcp`
 - 名称:`mcp-socket-server`
 
-保存后 Cherry Studio 会自动 `list_tools` 发现 17 个工具。
+保存后 Cherry Studio 会自动 `list_tools` 发现 12 个工具。
 
 **Claude Code**(`~/.claude/settings.json` 或项目 `.claude/settings.json`):
 
@@ -272,27 +272,34 @@ stdio 模式无需 config.yaml(用默认配置,bind 0.0.0.0:8080)。若要自定
 
 ### 7.3 验证对接
 
-对接成功后,在 client 的工具列表里应看到 17 个工具(见下文工具表)。可直接让 LLM 调用:
+对接成功后,在 client 的工具列表里应看到 12 个工具(见下文工具表)。可直接让 LLM 调用:
 
-> "查一下 10.12.131.32 的 socket_server 版本"
+> "查一下 10.12.131.32 上 /etc/hostname 文件是否存在"
 
-LLM 会调 `version_query(targets=["10.12.131.32"])`,返回版本号。
+LLM 会调 `isfile(targets=["10.12.131.32"], path="/etc/hostname")`,返回是否存在。
 
 ---
 
-## 8. 工具列表(17 个)
+## 8. 工具列表(12 个)
+
+### 0.2.0 变更说明
+
+- 工具由 17 收敛为 12:删除 `version_query` / `version_detail` / `routeinfo` / `command_exists` / `filesize` / `file_upload` / `file_download` 共 7 个,新增 `replay_run` / `socket_listen` 2 个。
+- 文件传输不再走 MCP 工具,改走靶机 HTTP 服务(`:9001`,需 socket_server ≥ 1.7.0;与 TCP `:9000` 不同端口,`host` 即 targets 里注册的 IP,IPv6 加方括号):
+  ```bash
+  # 下载:把靶机远端文件拉到本地
+  curl -o out.pcap "http://<host>:9001/files?path=<远端路径>"
+  # 上传:把本地文件推到靶机
+  curl -F "path=<远端路径>" -F "file=@本地文件" http://<host>:9001/files
+  ```
+  若 `:9001` 拒绝连接,说明该靶机未升级到 1.7.0。`replay_run` 的回放用 pcap 需先经此 HTTP 上传到靶机;`pcap_flow_extract` 的结果也可经此 HTTP 下载到本地分析。
 
 ### 只读(NONE/SAFE,无锁)
 
 | 工具 | datatype | 说明 |
 |---|---|---|
-| `version_query(targets, port?)` | 14 | 查版本号 |
 | `isfile(targets, path, port?)` | 7 | 文件是否存在 |
 | `isdir(targets, path, port?)` | 8 | 目录是否存在 |
-| `routeinfo(targets, port?)` | 4 | 路由信息(含默认网卡) |
-| `command_exists(targets, cmd, port?)` | 18 | 命令是否存在 |
-| `filesize(targets, path, port?)` | 11 | 文件大小 |
-| `version_detail(targets, port?)` | 19 | 版本详情(⚠️ 见下) |
 | `pcap_flow_extract(targets, pcap_dir, port?)` | 200 | pcap 五元组流 |
 
 ### 写(有锁 + 审计)
@@ -303,8 +310,8 @@ LLM 会调 `version_query(targets=["10.12.131.32"])`,返回版本号。
 | `capture_start(targets, iface?, path, port?)` | 5 | CAPTURE | 开始抓包(持锁到 stop) |
 | `capture_stop(targets, path, port?)` | 6 | CAPTURE | 停止抓包(释放锁) |
 | `boce_run(targets, url, count?, ..., port?)` | 131 | BROWSER | 拨测 |
-| `file_upload(targets, remote_path, content_b64, port?)` | 21-24 | FILE_IO | 上传文件 |
-| `file_download(targets, path, port?)` | 21-3 | FILE_IO | 下载文件 |
+| `replay_run(targets, pcaps, uplink_iface, downlink_iface, ..., port?)` | 0 | REPLAY | pcap 回放(限速/改五元组,见工具描述) |
+| `socket_listen(targets, action, listen_port?, file?, max_bytes?, port?)` | 171-174 | SYSTEM | TCP 监听收包(start/clean/save/fetch,配合回放对比) |
 
 ### 注册表
 
@@ -371,16 +378,16 @@ uv venv --python 3.10 venv
 uv pip install --python venv/bin/python -e ".[dev]"
 ```
 
-### Q: version_detail 报错
+### Q: 0.2.0 为何删了 version_detail / file_upload 等 7 个工具
 
-socket_server v1.3.9 的 `handlers.py` 未 import `REPO`,调用 datatype 19 会使服务端崩溃。需在 socket_server 仓修 `handlers.py:8` 为 `from .version import VERSION, REPO`。其他工具不受影响。
+工具有意收敛为 12 个:版本类/路由/文件属性查询改用 `cmd_exec` 或 HTTP 方式;文件传输改走靶机 `:9001` HTTP 服务(见第 8 节 0.2.0 变更说明)。
 
 ---
 
 ## 10. 开发
 
 ```bash
-# 跑全量测试(47 个)
+# 跑全量测试(52 个)
 venv/bin/python -m pytest tests/ -v
 
 # 跑单个模块
@@ -402,8 +409,8 @@ src/mcp_socket_server/
   __main__.py      CLI 入口
   config.py        配置加载(yaml + env)
   transport.py     Streamable HTTP(uvicorn)
-  server.py        FastMCP + 17 个工具
-  socket_client.py TCP 客户端(per-datatype recv + gzip + 文件传输)
+  server.py        FastMCP + 12 个工具
+  socket_client.py TCP 客户端(per-datatype recv + gzip)
   pool.py          连接池 + 批量调度 + session
   commands.py      datatype 注册表(锁类/危险等级)
   locks.py         LockManager(per-target 多模式锁)
@@ -414,6 +421,6 @@ src/mcp_socket_server/
 ### 已知限制
 
 - 审计源 IP 当前为 `internal`(behind_proxy 下取 X-Forwarded-For 待实现)
-- SYSTEM 锁类(version_switch/firewall/DPI)未实现
+- SYSTEM 锁类当前仅 socket_listen 使用(version_switch/firewall/DPI 未实现)
 - cmd_exec 白名单为前缀匹配,有注入局限(见 config.example.yaml 注释)
 - 重启丢内存 CAPTURE 锁,tcpdump 可能残留(需手动清理)
