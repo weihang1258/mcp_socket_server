@@ -36,6 +36,7 @@ class _Handler(socketserver.BaseRequestHandler):
         self.bin_recv_flag = False
         self.bufsize = 10240
         self.gzip = False
+        self.listen_mode = getattr(self.server, "listen_mode", "ok")
 
     def handle(self):
         datatotal = b""
@@ -136,6 +137,15 @@ class _Handler(socketserver.BaseRequestHandler):
         if datatype == 6:
             return json.dumps({"res": True}).encode()
         # 长度前缀类
+        if datatype == 0:
+            return json.dumps({"total_files": 1, "total_packets": 10,
+                               "total_bytes": 100, "uplink_packets": 5,
+                               "uplink_bytes": 50, "downlink_packets": 5,
+                               "downlink_bytes": 50, "flow_count": 1,
+                               "duration_seconds": 0.5, "target_mbps": 0,
+                               "actual_mbps": 1.6}).encode()
+        if datatype == 171:
+            return json.dumps({"pid": ["12345"]}).encode()
         if datatype == 200:
             res = json.dumps([{"pcap": "a.pcap", "srcIp": "1.1.1.1", "srcPort": 1,
                                "destIp": "2.2.2.2", "destPort": 2, "protoType": 1}]).encode()
@@ -156,7 +166,10 @@ class _Handler(socketserver.BaseRequestHandler):
                 content = _compress(content)
             return struct.pack("<Q", len(content)) + content
         if datatype == 174:
-            content = _compress(b"listener-data")
+            if self.listen_mode == "error":
+                return json.dumps({"error": "未启动监听"}).encode()
+            data = b"listener-data" * 100  # 1300B,超过测试 max_bytes=1000
+            content = _compress(data)
             return struct.pack("<Q", len(content)) + content
         if datatype in (15, 172, 173):
             return b"ok"
@@ -164,15 +177,26 @@ class _Handler(socketserver.BaseRequestHandler):
 
 
 class MockSocketServer:
+    listen_mode = "ok"  # 174 fetch 形态开关:"ok"|"error"(174 返回 {"error":...} JSON)
+
     def __init__(self):
         self._srv = None
         self._thread = None
         self.host = "127.0.0.1"
         self.port = 0
 
+    def __setattr__(self, name, value):
+        # handler 经 self.server(TCPServer).listen_mode 读开关,运行时赋值需同步过去
+        if name == "listen_mode":
+            srv = self.__dict__.get("_srv")
+            if srv is not None:
+                srv.listen_mode = value
+        super().__setattr__(name, value)
+
     def start(self):
         self._srv = socketserver.ThreadingTCPServer((self.host, 0), _Handler)
         self._srv.daemon_threads = True
+        self._srv.listen_mode = self.listen_mode  # 同步开关(默认 "ok")
         self.port = self._srv.server_address[1]
         self._thread = threading.Thread(target=self._srv.serve_forever, daemon=True)
         self._thread.start()

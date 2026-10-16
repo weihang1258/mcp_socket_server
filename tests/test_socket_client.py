@@ -48,13 +48,58 @@ def test_read_methods(mock_server, tmp_path):
     f.write_text("abc")
     c = SocketServerClient(mock_server.host, mock_server.port)
     c.connect()
-    assert c.version() == "1.3.9-mock"
     assert c.isfile(str(f)) is True
     assert c.isdir(str(tmp_path)) is True
-    assert isinstance(c.routeinfo(), dict)
-    assert c.command_exists("ls") is True
-    assert c.filesize(str(f)) == 1024  # mock 固定值
-    assert c.version_detail()["version"] == "1.3.9-mock"
     flows = c.pcap_flow_extract("/some/dir")
     assert flows[0]["protoType"] == 1
     c.close()
+
+
+def test_replay_run_method(mock_server):
+    from mcp_socket_server.socket_client import SocketServerClient
+    c = SocketServerClient(mock_server.host, mock_server.port)
+    c.connect()
+    try:
+        stats = c.replay_run(["/tmp/a.pcap"], "eth0", "eth1", mbps=10)
+        assert stats["total_packets"] == 10
+        assert stats["duration_seconds"] == 0.5
+    finally:
+        c.close()
+
+
+def test_socket_listen_start_clean_save(mock_server):
+    from mcp_socket_server.socket_client import SocketServerClient
+    c = SocketServerClient(mock_server.host, mock_server.port)
+    c.connect()
+    try:
+        r = c.socket_listen("start", listen_port=30001)
+        assert r["pid"] == ["12345"]
+        assert c.socket_listen("clean") == b"ok"
+        assert c.socket_listen("save", file="/tmp/l.log") == b"ok"
+    finally:
+        c.close()
+
+
+def test_socket_listen_fetch_ok_and_error(mock_server):
+    from mcp_socket_server.socket_client import SocketServerClient
+    c = SocketServerClient(mock_server.host, mock_server.port)
+    c.connect()
+    try:
+        data = c.socket_listen("fetch", max_bytes=1000)
+        assert data == b"listener-data" * 100  # 1300B 全量取回(截断是 server.py 层职责)
+    finally:
+        c.close()
+
+    # error 形态
+    mock_server.listen_mode = "error"
+    c2 = SocketServerClient(mock_server.host, mock_server.port)
+    c2.connect()
+    try:
+        try:
+            c2.socket_listen("fetch")
+            assert False, "should raise"
+        except ConnectionError as e:
+            assert "未启动监听" in str(e)
+    finally:
+        c2.close()
+        mock_server.listen_mode = "ok"

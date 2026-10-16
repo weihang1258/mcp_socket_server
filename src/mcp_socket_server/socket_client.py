@@ -150,11 +150,6 @@ class SocketServerClient:
         return self._recv_until_timeout()
 
     # ===== 只读便捷方法 =====
-    def version(self) -> str:
-        """datatype 14"""
-        self._send(14)
-        return json.loads(self.recv_text_response().decode("utf-8", "replace"))
-
     def isfile(self, path: str) -> bool:
         """datatype 7:payload {"file": path}(字段名对齐 netutils.isfile(file))"""
         self._send(7, json.dumps({"file": path}).encode())
@@ -164,27 +159,6 @@ class SocketServerClient:
         """datatype 8:payload {"dir": path}(字段名对齐 netutils.isdir(dir))"""
         self._send(8, json.dumps({"dir": path}).encode())
         return json.loads(self.recv_text_response().decode("utf-8", "replace")).get("res", False)
-
-    def routeinfo(self) -> dict:
-        """datatype 4:无 payload"""
-        self._send(4)
-        return json.loads(self.recv_text_response().decode("utf-8", "replace"))
-
-    def command_exists(self, cmd: str) -> bool:
-        """datatype 18:payload {"cmd": cmd}(只读路径,不暴露 install_cmd)"""
-        self._send(18, json.dumps({"cmd": cmd}).encode())
-        return json.loads(self.recv_text_response().decode("utf-8", "replace")).get("res", False)
-
-    def filesize(self, path: str) -> int:
-        """datatype 11:payload {"path": path}"""
-        self._send(11, json.dumps({"path": path}).encode())
-        return json.loads(self.recv_text_response().decode("utf-8", "replace")).get("res", 0)
-
-    def version_detail(self) -> dict:
-        """datatype 19。注:handlers.py v1.3.9 因 REPO 未 import(line 8)而 NameError,
-        线上未修则本调用失败(连接被服务端关闭)。"""
-        self._send(19)
-        return json.loads(self.recv_text_response().decode("utf-8", "replace"))
 
     def pcap_flow_extract(self, pcap_dir: str) -> list:
         """datatype 200:payload {"pcap_dir": pcap_dir} -> 方向化五元组流(长度前缀 JSON)"""
@@ -236,46 +210,75 @@ class SocketServerClient:
         self._send(131, json.dumps(payload).encode())
         return self.recv_lenprefixed_json()
 
-    def file_upload(self, remote_path: str, content: bytes,
-                    use_gzip: bool = False) -> bool:
-        """文件上传 21->22->23->24 多步握手,单持久连接。
-        21{"filepath","gzip"}->"21 ok";22[8B <Q len]->"22 ok";
-        23[4B len][content] 无 datatype->"23 ok";24->"24 ok"。
-        任一步失败抛 ConnectionError,含步骤号 + 服务端实际响应(便于排障);
-        抛异常后 session 上下文标记连接不健康并丢弃,避免毒连接复用。"""
-        raw = compress_gzip(content) if use_gzip else content
-        self._send(21, json.dumps({"filepath": remote_path, "gzip": use_gzip}).encode())
-        resp = self.recv_inline_text()
-        if resp != b"21 ok":
-            raise ConnectionError(
-                f"upload step1(21 filepath) failed: resp={resp!r}")
-        self._send(22, struct.pack("<Q", len(raw)))
-        resp = self.recv_inline_text()
-        if resp != b"22 ok":
-            raise ConnectionError(
-                f"upload step2(22 length={len(raw)}) failed: resp={resp!r}")
-        self._send_raw(raw)  # 23: 无 datatype 字段,_send_raw 自加 [4B len] 前缀
-        resp = self.recv_inline_text()
-        if resp != b"23 ok":
-            raise ConnectionError(
-                f"upload step3(23 content {len(raw)}B) failed: resp={resp!r}")
-        self._send(24, b"")
-        resp = self.recv_inline_text()
-        if resp != b"24 ok":
-            raise ConnectionError(
-                f"upload step4(24 commit) failed: resp={resp!r}")
-        return True
+    def replay_run(self, pcaps: list, uplink_iface: str, downlink_iface: str,
+                   uplink_vlan=None, downlink_vlan=None, mbps: int = 0,
+                   force_ip_src=None, force_ip_dst=None,
+                   force_sport=None, force_dport=None) -> dict:
+        """datatype 0:pcap 回放。payload 对齐 handlers.py do() 的 0 分支
+        (必填 pcaps/uplink_iface/downlink_iface;PcapReplayer(**data) 其余透传)。
+        响应无长度前缀 JSON(同 5/6 型),返回 stats dict。"""
+        payload = {"pcaps": pcaps, "uplink_iface": uplink_iface,
+                   "downlink_iface": downlink_iface, "mbps": mbps}
+        if uplink_vlan is not None:
+            payload["uplink_vlan"] = uplink_vlan
+        if downlink_vlan is not None:
+            payload["downlink_vlan"] = downlink_vlan
+        if force_ip_src is not None:
+            payload["force_ip_src"] = force_ip_src
+        if force_ip_dst is not None:
+            payload["force_ip_dst"] = force_ip_dst
+        if force_sport is not None:
+            payload["force_sport"] = force_sport
+        if force_dport is not None:
+            payload["force_dport"] = force_dport
+        self._send(0, json.dumps(payload).encode())
+        return json.loads(self.recv_text_response().decode("utf-8", "replace"))
 
-    def file_download(self, remote_path: str, use_gzip: bool = False) -> bytes:
-        """文件下载 21->3,单持久连接。21 先设 filepath(连接状态),3 读 {"gzip":bool}。
-        返回文件内容字节。21 步失败抛 ConnectionError(含服务端实际响应)。"""
-        self._send(21, json.dumps({"filepath": remote_path, "gzip": use_gzip}).encode())
-        resp = self.recv_inline_text()
-        if resp != b"21 ok":
-            raise ConnectionError(
-                f"download step1(21 filepath) failed: resp={resp!r}")
-        self._send(3, json.dumps({"gzip": use_gzip}).encode())
-        n, body = self.recv_file_response()
-        if use_gzip:
-            body = decompress_gzip(body)
-        return body
+    def socket_listen(self, action: str, listen_port: int = 30001,
+                      file: str = None, max_bytes: int = 1048576) -> object:
+        """socket 监听编排(datatype 171-174)。
+
+        start->171 {"host":null,"port":listen_port} -> {"pid":[...]}(json)
+        clean->172 / save->173 {"file":file} -> b"ok"(error 判失败)
+        fetch->174 -> 全量明文 bytes(gzip 解包)。
+        174 失败形态:未启动监听时服务端发 {"error":...} JSON(无 8B 前缀),
+        先按首字节探测:非 8B 长度前缀可解析或解析出明文 JSON 时按错误处理。
+        """
+        if action == "start":
+            self._send(171, json.dumps({"host": None, "port": listen_port}).encode())
+            result = json.loads(self.recv_text_response().decode("utf-8", "replace"))
+            if not result.get("pid"):
+                raise ConnectionError(f"listen start failed: pid empty, resp={result}")
+            return result
+        if action == "clean":
+            self._send(172)
+            resp = self.recv_ok()
+            if resp != b"ok":
+                raise ConnectionError(f"listen clean failed: resp={resp!r}")
+            return resp
+        if action == "save":
+            if not file:
+                raise ValueError("save requires file")
+            self._send(173, json.dumps({"file": file}).encode())
+            resp = self.recv_ok()
+            if resp != b"ok":
+                raise ConnectionError(f"listen save failed: resp={resp!r}")
+            return resp
+        if action == "fetch":
+            self._send(174)
+            # 探测:先窥探首 8 字节,合法 <Q 长度前缀则走文件流;否则按 error JSON
+            head = self._recv_n(8)
+            candidate_len = struct.unpack("<Q", head)[0]
+            # 合法性判据:gzip 明文长度不会超过 4GB,且 JSON error 首字节是 '{'(0x7b)
+            if head[0:1] == b"{":
+                # error JSON:把 head 连同后续一起读完按 JSON 解析
+                rest = self._recv_until_timeout()
+                raw = (head + rest).decode("utf-8", "replace")
+                try:
+                    msg = json.loads(raw).get("error", raw)
+                except ValueError:
+                    msg = raw
+                raise ConnectionError(f"listen fetch failed: {msg}")
+            content = self._recv_n(candidate_len)
+            return decompress_gzip(content)
+        raise ValueError(f"unknown action: {action}")
