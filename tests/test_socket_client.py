@@ -67,6 +67,38 @@ def test_replay_run_method(mock_server):
         c.close()
 
 
+def test_replay_run_error_raises(mock_server):
+    from mcp_socket_server.socket_client import SocketServerClient
+    mock_server.replay_mode = "error"
+    c = SocketServerClient(mock_server.host, mock_server.port)
+    c.connect()
+    try:
+        try:
+            c.replay_run(["/tmp/a.pcap"], "eth0", "eth1")
+            assert False, "should raise"
+        except ConnectionError as e:
+            assert "missing uplink_iface" in str(e)
+    finally:
+        c.close()
+        mock_server.replay_mode = "ok"
+
+
+def test_socket_listen_empty_pid_raises(mock_server):
+    from mcp_socket_server.socket_client import SocketServerClient
+    mock_server.listen_pid_mode = "empty"
+    c = SocketServerClient(mock_server.host, mock_server.port)
+    c.connect()
+    try:
+        try:
+            c.socket_listen("start")
+            assert False, "should raise"
+        except ConnectionError as e:
+            assert "pid empty" in str(e)
+    finally:
+        c.close()
+        mock_server.listen_pid_mode = "ok"
+
+
 def test_socket_listen_start_clean_save(mock_server):
     from mcp_socket_server.socket_client import SocketServerClient
     c = SocketServerClient(mock_server.host, mock_server.port)

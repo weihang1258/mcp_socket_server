@@ -49,22 +49,13 @@ class CommandSpec:
 
 COMMANDS: dict[str, CommandSpec] = {
     # 只读类(NONE/SAFE)
-    "version_query":     CommandSpec("version_query", 14, LockClass.NONE, Danger.SAFE),
     "isfile":            CommandSpec("isfile", 7, LockClass.NONE, Danger.SAFE),
     "isdir":             CommandSpec("isdir", 8, LockClass.NONE, Danger.SAFE),
-    "routeinfo":         CommandSpec("routeinfo", 4, LockClass.NONE, Danger.SAFE),
-    "command_exists":    CommandSpec("command_exists", 18, LockClass.NONE, Danger.SAFE),
-    "filesize":          CommandSpec("filesize", 11, LockClass.NONE, Danger.SAFE),
-    "version_detail":    CommandSpec("version_detail", 19, LockClass.NONE, Danger.SAFE),
     "pcap_flow_extract": CommandSpec("pcap_flow_extract", 200, LockClass.NONE, Danger.SAFE),
 
     # 抓包(CAPTURE,按 path 排他;capture_start 持锁到 capture_stop)
     "capture_start":     CommandSpec("capture_start", 5, LockClass.CAPTURE, Danger.WRITE, ("path",)),
     "capture_stop":      CommandSpec("capture_stop", 6, LockClass.CAPTURE, Danger.WRITE, ("path",)),
-
-    # 文件传输(多步会话,datatype=None;FILE_IO per-target 排他)
-    "file_upload":       CommandSpec("file_upload", None, LockClass.FILE_IO, Danger.WRITE),
-    "file_download":     CommandSpec("file_download", None, LockClass.FILE_IO, Danger.WRITE),
 
     # 命令执行(危险,白名单;本期实现)
     "cmd_exec":          CommandSpec("cmd_exec", 1, LockClass.SHELL, Danger.DANGER),

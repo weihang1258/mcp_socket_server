@@ -232,7 +232,10 @@ class SocketServerClient:
         if force_dport is not None:
             payload["force_dport"] = force_dport
         self._send(0, json.dumps(payload).encode())
-        return json.loads(self.recv_text_response().decode("utf-8", "replace"))
+        result = json.loads(self.recv_text_response().decode("utf-8", "replace"))
+        if isinstance(result, dict) and result.get("status") == "error":
+            raise ConnectionError(f"replay failed: {result.get('message', result)}")
+        return result
 
     def socket_listen(self, action: str, listen_port: int = 30001,
                       file: str = None, max_bytes: int = 1048576) -> object:

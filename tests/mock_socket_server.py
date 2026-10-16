@@ -37,6 +37,8 @@ class _Handler(socketserver.BaseRequestHandler):
         self.bufsize = 10240
         self.gzip = False
         self.listen_mode = getattr(self.server, "listen_mode", "ok")
+        self.replay_mode = getattr(self.server, "replay_mode", "ok")
+        self.listen_pid_mode = getattr(self.server, "listen_pid_mode", "ok")
 
     def handle(self):
         datatotal = b""
@@ -138,6 +140,8 @@ class _Handler(socketserver.BaseRequestHandler):
             return json.dumps({"res": True}).encode()
         # 长度前缀类
         if datatype == 0:
+            if self.replay_mode == "error":
+                return json.dumps({"status": "error", "message": "missing uplink_iface"}).encode()
             return json.dumps({"total_files": 1, "total_packets": 10,
                                "total_bytes": 100, "uplink_packets": 5,
                                "uplink_bytes": 50, "downlink_packets": 5,
@@ -145,6 +149,8 @@ class _Handler(socketserver.BaseRequestHandler):
                                "duration_seconds": 0.5, "target_mbps": 0,
                                "actual_mbps": 1.6}).encode()
         if datatype == 171:
+            if self.listen_pid_mode == "empty":
+                return json.dumps({"pid": []}).encode()
             return json.dumps({"pid": ["12345"]}).encode()
         if datatype == 200:
             res = json.dumps([{"pcap": "a.pcap", "srcIp": "1.1.1.1", "srcPort": 1,
@@ -178,6 +184,8 @@ class _Handler(socketserver.BaseRequestHandler):
 
 class MockSocketServer:
     listen_mode = "ok"  # 174 fetch 形态开关:"ok"|"error"(174 返回 {"error":...} JSON)
+    replay_mode = "ok"  # 0 replay 形态开关:"ok"|"error"(0 返回 {"status":"error",...})
+    listen_pid_mode = "ok"  # 171 start pid 开关:"ok"|"empty"(171 返回 {"pid":[]})
 
     def __init__(self):
         self._srv = None
@@ -187,16 +195,18 @@ class MockSocketServer:
 
     def __setattr__(self, name, value):
         # handler 经 self.server(TCPServer).listen_mode 读开关,运行时赋值需同步过去
-        if name == "listen_mode":
+        if name in ("listen_mode", "replay_mode", "listen_pid_mode"):
             srv = self.__dict__.get("_srv")
             if srv is not None:
-                srv.listen_mode = value
+                setattr(srv, name, value)
         super().__setattr__(name, value)
 
     def start(self):
         self._srv = socketserver.ThreadingTCPServer((self.host, 0), _Handler)
         self._srv.daemon_threads = True
         self._srv.listen_mode = self.listen_mode  # 同步开关(默认 "ok")
+        self._srv.replay_mode = self.replay_mode
+        self._srv.listen_pid_mode = self.listen_pid_mode
         self.port = self._srv.server_address[1]
         self._thread = threading.Thread(target=self._srv.serve_forever, daemon=True)
         self._thread.start()

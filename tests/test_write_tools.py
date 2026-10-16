@@ -106,6 +106,28 @@ def test_replay_run_tool(app, mock_server):
     assert stats["duration_seconds"] == 0.5
 
 
+def test_socket_listen_empty_pid_failed(app, mock_server):
+    mock_server.listen_pid_mode = "empty"
+    try:
+        r = socket_listen([mock_server.host], "start", listen_port=30001,
+                          port=mock_server.port)
+        assert r["ok"] == 0
+        assert "pid empty" in r["failed"][0]["reason"]
+    finally:
+        mock_server.listen_pid_mode = "ok"
+
+
+def test_replay_run_error_failed(app, mock_server):
+    mock_server.replay_mode = "error"
+    try:
+        r = replay_run([mock_server.host], ["/tmp/a.pcap"], "eth0", "eth1",
+                       port=mock_server.port)
+        assert r["ok"] == 0
+        assert "missing uplink_iface" in r["failed"][0]["reason"]
+    finally:
+        mock_server.replay_mode = "ok"
+
+
 def test_socket_listen_lifecycle(app, mock_server, tmp_path):
     r1 = socket_listen([mock_server.host], "start", listen_port=30001,
                        port=mock_server.port)
