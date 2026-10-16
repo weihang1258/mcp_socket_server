@@ -116,7 +116,7 @@ class SocketServerClient:
         return data
 
     def recv_text_response(self) -> bytes:
-        """原始 JSON 响应(无长度前缀):4/7/8/9/10/11/14/18/19/5/6/171。调用方 json.loads。"""
+        """原始 JSON 响应(无长度前缀):1/5/6/7/8/131/171。调用方 json.loads。"""
         return self._recv_until_timeout()
 
     def recv_gzip_response(self):

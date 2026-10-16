@@ -214,20 +214,13 @@ def remove_target(host: str, port: int = 9000,
 
 
 @mcp.tool()
-def version_query(targets: list[str], port: int = 9000,
-                  description: CallDescription = "") -> dict:
-    """查询多台靶机 socket_server 版本号(datatype 14,只读)。"""
-    resolved = _resolve_targets(targets)
-    results = get_scheduler().batch(resolved, lambda c: c.version(), port=port, timeout=15)
-    return {"ok": sum(1 for r in results if r.ok),
-            "failed": _failed(results),
-            "results": [{"target": r.target, "version": r.data} for r in results if r.ok]}
-
-
-@mcp.tool()
 def isfile(targets: list[str], path: str, port: int = 9000,
            description: CallDescription = "") -> dict:
-    """检查文件是否存在(datatype 7,只读)。"""
+    """检查靶机文件是否存在(datatype 7,只读)。
+    文件传输用靶机 HTTP 服务(:9001,与 TCP 9000 不同端口):
+    下载 curl -o out.pcap "http://<host>:9001/files?path=<远端路径>"
+    上传 curl -F "path=<远端路径>" -F "file=@本地文件" http://<host>:9001/files
+    host 即 targets 里注册的 IP(IPv6 加方括号);若 9001 拒绝连接,说明该靶机未升级到 1.7.0。"""
     resolved = _resolve_targets(targets)
     results = get_scheduler().batch(resolved, lambda c: c.isfile(path), port=port, timeout=15)
     return {"ok": sum(1 for r in results if r.ok),
@@ -247,53 +240,10 @@ def isdir(targets: list[str], path: str, port: int = 9000,
 
 
 @mcp.tool()
-def routeinfo(targets: list[str], port: int = 9000,
-              description: CallDescription = "") -> dict:
-    """查询路由信息(datatype 4,只读)。"""
-    resolved = _resolve_targets(targets)
-    results = get_scheduler().batch(resolved, lambda c: c.routeinfo(), port=port, timeout=15)
-    return {"ok": sum(1 for r in results if r.ok),
-            "failed": _failed(results),
-            "results": [{"target": r.target, "routeinfo": r.data} for r in results if r.ok]}
-
-
-@mcp.tool()
-def command_exists(targets: list[str], cmd: str, port: int = 9000,
-                   description: CallDescription = "") -> dict:
-    """检查命令是否存在(datatype 18,只读,不自动安装)。"""
-    resolved = _resolve_targets(targets)
-    results = get_scheduler().batch(resolved, lambda c: c.command_exists(cmd), port=port, timeout=15)
-    return {"ok": sum(1 for r in results if r.ok),
-            "failed": _failed(results),
-            "results": [{"target": r.target, "exists": r.data} for r in results if r.ok]}
-
-
-@mcp.tool()
-def filesize(targets: list[str], path: str, port: int = 9000,
-             description: CallDescription = "") -> dict:
-    """查询文件字节数(datatype 11,只读)。"""
-    resolved = _resolve_targets(targets)
-    results = get_scheduler().batch(resolved, lambda c: c.filesize(path), port=port, timeout=15)
-    return {"ok": sum(1 for r in results if r.ok),
-            "failed": _failed(results),
-            "results": [{"target": r.target, "size": r.data} for r in results if r.ok]}
-
-
-@mcp.tool()
-def version_detail(targets: list[str], port: int = 9000,
-                   description: CallDescription = "") -> dict:
-    """查询服务端版本详情(datatype 19,只读;v1.3.9 可能 REPO bug,失败见 failed)。"""
-    resolved = _resolve_targets(targets)
-    results = get_scheduler().batch(resolved, lambda c: c.version_detail(), port=port, timeout=15)
-    return {"ok": sum(1 for r in results if r.ok),
-            "failed": _failed(results),
-            "results": [{"target": r.target, "detail": r.data} for r in results if r.ok]}
-
-
-@mcp.tool()
 def pcap_flow_extract(targets: list[str], pcap_dir: str, port: int = 9000,
                       description: CallDescription = "") -> dict:
-    """提取 pcap 五元组流(datatype 200,只读)。"""
+    """提取 pcap 五元组流(datatype 200,只读)。pcap 可先经 HTTP 下载到本地分析:
+    curl -o out.pcap "http://<host>:9001/files?path=<pcap 路径>"。"""
     resolved = _resolve_targets(targets)
     results = get_scheduler().batch(resolved, lambda c: c.pcap_flow_extract(pcap_dir),
                                     port=port, timeout=30)
@@ -424,133 +374,6 @@ def boce_run(targets: list[str], url: str, count: int = 1, interval: int = 0,
                       audit_tool="boce_run",
                       audit_params={"url": url, "count": count, "mode": mode},
                       timeout=60)
-
-
-@mcp.tool()
-def file_upload(targets: list[str], remote_path: str, content_b64: str,
-                use_gzip: bool = False, port: int = 9000,
-                description: CallDescription = "") -> dict:
-    """上传文件(21->22->23->24 多步握手,FILE_IO 锁,独占连接)。
-    content_b64 为文件内容 base64;失败时 failed[].reason 含失败步骤 + 服务端响应。"""
-    import base64
-    t0 = time.monotonic()
-    try:
-        content = base64.b64decode(content_b64)
-    except Exception as e:
-        return {"ok": 0,
-                "failed": [{"reason": f"content_b64 解码失败: {e}"}],
-                "results": []}
-    resolved = _resolve_targets(targets)
-    sched = get_scheduler()
-    results: list[TargetResult] = []
-
-    def run_session(host_port: str) -> TargetResult:
-        lock_mgr = _lock_manager
-        if lock_mgr is not None:
-            lock_mgr.acquire(host_port, LockClass.FILE_IO)
-        try:
-            with sched.session(host_port, port) as client:
-                client.file_upload(remote_path, content, use_gzip=use_gzip)
-            return TargetResult(target=host_port, ok=True,
-                                data={"remote_path": remote_path, "size": len(content)})
-        except Exception as e:
-            return TargetResult(target=host_port, ok=False, error=str(e))
-        finally:
-            if lock_mgr is not None:
-                try:
-                    lock_mgr.release(host_port, LockClass.FILE_IO)
-                except Exception:
-                    pass
-
-    with ThreadPoolExecutor(max_workers=min(10, len(resolved) or 1),
-                           thread_name_prefix="mcp-file-up") as ex:
-        futs = {ex.submit(run_session, h): h for h in resolved}
-        for fut in as_completed(futs):
-            try:
-                results.append(fut.result())
-            except Exception as e:
-                results.append(TargetResult(target=futs[fut], ok=False, error=str(e)))
-
-    if _audit_logger is not None:
-        try:
-            _audit_logger.write("file_upload",
-                                {"remote_path": remote_path, "size": len(content),
-                                 "use_gzip": use_gzip},
-                                [{"target": r.target, "ok": r.ok,
-                                  "error": getattr(r, "error", None)} for r in results],
-                                ok_count=sum(1 for r in results if r.ok),
-                                failed_count=sum(1 for r in results if not r.ok),
-                                duration_ms=int((time.monotonic() - t0) * 1000),
-                                source_ip="internal")
-        except Exception:
-            pass
-
-    return {"ok": sum(1 for r in results if r.ok),
-            "failed": _failed(results),
-            "results": [r.data for r in results if r.ok]}
-
-
-@mcp.tool()
-def file_download(targets: list[str], path: str, use_gzip: bool = False,
-                  port: int = 9000, description: CallDescription = "") -> dict:
-    """下载文件(21->3 多步握手,FILE_IO 锁)。返回 {local_path,size,sha256}。"""
-    import base64, hashlib, os, tempfile
-    t0 = time.monotonic()
-    resolved = _resolve_targets(targets)
-    sched = get_scheduler()
-    results: list[TargetResult] = []
-    dl_dir = os.environ.get("MCP_DOWNLOAD_DIR", "./downloads")
-    os.makedirs(dl_dir, exist_ok=True)
-
-    def run_session(host_port: str) -> TargetResult:
-        lock_mgr = _lock_manager
-        if lock_mgr is not None:
-            lock_mgr.acquire(host_port, LockClass.FILE_IO)
-        try:
-            with sched.session(host_port, port) as client:
-                body = client.file_download(path, use_gzip=use_gzip)
-            basename = os.path.basename(path) or "downloaded"
-            local = os.path.join(dl_dir, host_port, basename)
-            os.makedirs(os.path.dirname(local), exist_ok=True)
-            with open(local, "wb") as f:
-                f.write(body)
-            sha256 = hashlib.sha256(body).hexdigest()
-            return TargetResult(target=host_port, ok=True,
-                                data={"local_path": local, "size": len(body),
-                                      "sha256": sha256})
-        except Exception as e:
-            return TargetResult(target=host_port, ok=False, error=str(e))
-        finally:
-            if lock_mgr is not None:
-                try:
-                    lock_mgr.release(host_port, LockClass.FILE_IO)
-                except Exception:
-                    pass
-
-    with ThreadPoolExecutor(max_workers=min(10, len(resolved) or 1),
-                           thread_name_prefix="mcp-file-dl") as ex:
-        futs = {ex.submit(run_session, h): h for h in resolved}
-        for fut in as_completed(futs):
-            try:
-                results.append(fut.result())
-            except Exception as e:
-                results.append(TargetResult(target=futs[fut], ok=False, error=str(e)))
-
-    if _audit_logger is not None:
-        try:
-            _audit_logger.write("file_download", {"path": path, "use_gzip": use_gzip},
-                                [{"target": r.target, "ok": r.ok,
-                                  "error": getattr(r, "error", None)} for r in results],
-                                ok_count=sum(1 for r in results if r.ok),
-                                failed_count=sum(1 for r in results if not r.ok),
-                                duration_ms=int((time.monotonic() - t0) * 1000),
-                                source_ip="internal")
-        except Exception:
-            pass
-
-    return {"ok": sum(1 for r in results if r.ok),
-            "failed": _failed(results),
-            "results": [r.data for r in results if r.ok]}
 
 
 def main() -> None:

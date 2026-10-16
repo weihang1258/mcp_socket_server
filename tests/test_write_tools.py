@@ -1,13 +1,10 @@
-"""写工具集成测试:cmd_exec / capture / boce / file_upload-download + 锁 + 审计。"""
-import base64
-import os
-
+"""写工具集成测试:cmd_exec / capture / boce + 锁 + 审计。"""
 import pytest
 
 from mcp_socket_server.config import load_config
 from mcp_socket_server.server import (
     add_target, boce_run, capture_start, capture_stop, cmd_exec,
-    file_download, file_upload, init_server, remove_target,
+    init_server, remove_target,
 )
 from mcp_socket_server.registry import set_registry
 from mcp_socket_server.audit import set_audit
@@ -65,23 +62,6 @@ def test_boce_run_tool(app, mock_server):
     res = boce_run([mock_server.host], "http://example.com", port=mock_server.port)
     assert res["ok"] == 1
     assert res["results"][0]["status"] == "ok"
-
-
-def test_file_upload_download(app, mock_server, tmp_path):
-    remote = str(tmp_path / "up.txt")
-    content = b"hello-upload-test"
-    r1 = file_upload([mock_server.host], remote,
-                      base64.b64encode(content).decode(), port=mock_server.port)
-    assert r1["ok"] == 1
-    assert r1["results"][0]["size"] == len(content)
-    # 文件应真实写入(mock 的 21->22->23->24 会落盘)
-    assert os.path.isfile(remote)
-    # 下载回来
-    r2 = file_download([mock_server.host], remote, port=mock_server.port)
-    assert r2["ok"] == 1
-    assert r2["results"][0]["size"] == len(content)
-    with open(r2["results"][0]["local_path"], "rb") as f:
-        assert f.read() == content
 
 
 def test_add_remove_target(app, mock_server, tmp_path):

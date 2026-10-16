@@ -8,17 +8,17 @@ from mcp_socket_server.pool import (
 
 def test_batch_read_fanout(mock_server):
     sched = Scheduler()
-    results = sched.batch([mock_server.host], lambda c: c.version(),
+    results = sched.batch([mock_server.host], lambda c: c.isdir("/"),
                           port=mock_server.port, timeout=5)
     assert len(results) == 1
     r = results[0]
     assert isinstance(r, TargetResult)
-    assert r.ok and r.data == "1.3.9-mock"
+    assert r.ok and r.data is True
 
 
 def test_batch_partial_failure(mock_server):
     sched = Scheduler()
-    results = sched.batch([mock_server.host, "127.0.0.1:1"], lambda c: c.version(),
+    results = sched.batch([mock_server.host, "127.0.0.1:1"], lambda c: c.isdir("/"),
                           port=mock_server.port, timeout=2)
     assert sum(1 for r in results if r.ok) == 1
     failed = [r for r in results if not r.ok]
@@ -28,7 +28,7 @@ def test_batch_partial_failure(mock_server):
 def test_connection_reuse(mock_server):
     p = TargetPool(mock_server.host, mock_server.port)
     c1 = p.acquire(timeout=5)
-    c1.version()
+    c1.isdir("/")
     p.release(c1)
     c2 = p.acquire(timeout=5)  # 应复用同一条连接(服务端持久连接)
     assert c2 is c1

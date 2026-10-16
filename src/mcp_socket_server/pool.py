@@ -146,11 +146,11 @@ class Scheduler:
 
     @contextmanager
     def session(self, host: str, port: int = 9000, timeout: float = 30) -> Iterator[SocketServerClient]:
-        """借出独占连接用于多步操作(文件上传/下载)。context manager。
+        """借出独占连接用于多步操作。context manager。
 
         用法:
             with sched.session(host, port) as client:
-                client.file_upload(remote, content)
+                client.cmd_exec("echo hi")
         """
         pool = self.get_pool(host, port)
         client = pool.acquire(socket_timeout=int(timeout))
