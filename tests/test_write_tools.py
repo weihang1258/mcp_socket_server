@@ -1,10 +1,12 @@
 """写工具集成测试:cmd_exec / capture / boce + 锁 + 审计。"""
+import base64
+
 import pytest
 
 from mcp_socket_server.config import load_config
 from mcp_socket_server.server import (
     add_target, boce_run, capture_start, capture_stop, cmd_exec,
-    init_server, remove_target,
+    init_server, remove_target, replay_run, socket_listen,
 )
 from mcp_socket_server.registry import set_registry
 from mcp_socket_server.audit import set_audit
@@ -93,3 +95,31 @@ def test_audit_recorded(app, mock_server, tmp_path):
         "SELECT tool, ok_count FROM audit_log WHERE tool='cmd_exec'").fetchall()
     assert len(rows) >= 1
     assert rows[-1][1] == 1
+
+
+def test_replay_run_tool(app, mock_server):
+    res = replay_run([mock_server.host], ["/tmp/a.pcap"], "eth0", "eth1",
+                     port=mock_server.port)
+    assert res["ok"] == 1
+    stats = res["results"][0]
+    assert stats["total_packets"] == 10
+    assert stats["duration_seconds"] == 0.5
+
+
+def test_socket_listen_lifecycle(app, mock_server, tmp_path):
+    r1 = socket_listen([mock_server.host], "start", listen_port=30001,
+                       port=mock_server.port)
+    assert r1["ok"] == 1
+    assert r1["results"][0]["pid"] == ["12345"]
+
+    r2 = socket_listen([mock_server.host], "fetch", max_bytes=1000,
+                       port=mock_server.port)
+    assert r2["ok"] == 1
+    data = r2["results"][0]
+    assert data["truncated"] is True          # 1300B > 1000B
+    assert data["size"] == 1300
+    assert len(base64.b64decode(data["data_b64"])) == 1000
+    assert data["file_path"].startswith("/home/tmp/listen_")
+
+    r3 = socket_listen([mock_server.host], "clean", port=mock_server.port)
+    assert r3["ok"] == 1

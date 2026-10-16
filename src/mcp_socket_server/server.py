@@ -376,6 +376,81 @@ def boce_run(targets: list[str], url: str, count: int = 1, interval: int = 0,
                       timeout=60)
 
 
+@mcp.tool()
+def replay_run(targets: list[str], pcaps: list[str], uplink_iface: str,
+               downlink_iface: str, uplink_vlan: int | None = None,
+               downlink_vlan: int | None = None, mbps: int = 0,
+               force_ip_src: str | None = None, force_ip_dst: str | None = None,
+               force_sport: int | None = None, force_dport: int | None = None,
+               port: int = 9000, description: CallDescription = "") -> dict:
+    """在靶机回放 pcap 流量文件(scapy 双接口收发,支持限速/改五元组)。需先用 HTTP 上传把 pcap 传到靶机: curl -F "path=/home/tmp/x.pcap" -F "file=@x.pcap" http://<host>:9001/files。回放与抓包/拨测同靶机互斥;回放+抓包请分属两台靶机(跨机拓扑)。返回 {total_files,total_packets,total_bytes,uplink_packets,uplink_bytes,downlink_packets,downlink_bytes,flow_count,duration_seconds,target_mbps,actual_mbps}"""
+    logger.info(f"replay_run CALLED: targets={targets} pcaps={pcaps} "
+                f"uplink={uplink_iface} downlink={downlink_iface} mbps={mbps}")
+    resolved = _resolve_targets(targets)
+
+    def run_one(client):
+        return client.replay_run(pcaps, uplink_iface, downlink_iface,
+                                 uplink_vlan=uplink_vlan,
+                                 downlink_vlan=downlink_vlan, mbps=mbps,
+                                 force_ip_src=force_ip_src,
+                                 force_ip_dst=force_ip_dst,
+                                 force_sport=force_sport,
+                                 force_dport=force_dport)
+
+    return _run_batch(resolved, port, run_one,
+                      lock_class=LockClass.REPLAY,
+                      audit_tool="replay_run",
+                      audit_params={"pcaps": pcaps, "uplink_iface": uplink_iface,
+                                    "downlink_iface": downlink_iface, "mbps": mbps},
+                      timeout=120)
+
+
+@mcp.tool()
+def socket_listen(targets: list[str], action: str, listen_port: int = 30001,
+                  file: str = "", max_bytes: int = 1048576, port: int = 9000,
+                  description: CallDescription = "") -> dict:
+    """在靶机启动 TCP 端口监听接收流量,配合回放做对比测试。action: start=启动返回pid / clean=清空已收数据 / save=已收数据保存到靶机文件 / fetch=取回已收数据(超过 max_bytes 落盘靶机并截断返回)。注意: 已在监听时再 start 为幂等操作,返回现有 pid,更换 listen_port 需先等监听自然结束(服务端无 stop 动作,重启靶机进程才能换端口)。同一监听实例须按 start→...→save/fetch 顺序调用"""
+    logger.info(f"socket_listen CALLED: targets={targets} action={action} "
+                f"listen_port={listen_port} file={file}")
+    if action == "save" and not file:
+        return {"ok": 0,
+                "failed": [{"target": t, "reason": "save 动作需要 file 参数"}
+                           for t in targets],
+                "results": []}
+    resolved = _resolve_targets(targets)
+
+    def run_one(client):
+        if action == "start":
+            return client.socket_listen("start", listen_port=listen_port)
+        if action == "clean":
+            return client.socket_listen("clean")
+        if action == "save":
+            return client.socket_listen("save", file=file)
+        # fetch: 174 取全量 -> 超 max_bytes 截断 + 复用 173 落盘
+        data = client.socket_listen("fetch", max_bytes=max_bytes)
+        import base64 as _b64
+        import time as _time
+        size = len(data)
+        result = {"size": size}
+        if size <= max_bytes:
+            result.update({"data_b64": _b64.b64encode(data).decode(),
+                           "truncated": False})
+            return result
+        ts = _time.strftime("%Y%m%d_%H%M%S")
+        file_path = f"/home/tmp/listen_{ts}.log"
+        client.socket_listen("save", file=file_path)  # 173 在靶机侧写 ss.data 全量
+        result.update({"data_b64": _b64.b64encode(data[:max_bytes]).decode(),
+                       "truncated": True, "file_path": file_path})
+        return result
+
+    return _run_batch(resolved, port, run_one,
+                      lock_class=LockClass.SYSTEM,
+                      audit_tool="socket_listen",
+                      audit_params={"action": action, "listen_port": listen_port,
+                                    "file": file, "max_bytes": max_bytes},
+                      timeout=30)
+
+
 def main() -> None:
     """stdio 模式(本地)。远程用 __main__.main -> transport.run(Streamable HTTP)。"""
     mcp.run()
