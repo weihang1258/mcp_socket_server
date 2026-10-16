@@ -4,7 +4,7 @@ LockClass 定义在 commands.py,本模块执行。锁策略:
   - NONE:跳过,自由并发
   - CAPTURE:按 (target, path) 排他;capture_start 持锁到 capture_stop
   - FILE_IO/SHELL/BROWSER:per-target 排他(lock_key_fields=() 时)
-  - SYSTEM:全局排他(stub,本期不实现)
+  - SYSTEM/REPLAY:per-target 排他
 
 冲突:fail-fast(非阻塞 try);冲突->该 target failed,reason 标注冲突类+key。
 """
@@ -45,7 +45,7 @@ class TargetLock:
             return True
         if lock_class == LockClass.CAPTURE:
             return self._acquire_capture(key)
-        # FILE_IO / SHELL / BROWSER / SYSTEM: per-target 排他
+        # FILE_IO / SHELL / BROWSER / SYSTEM / REPLAY: per-target 排他
         return self._acquire_exclusive(lock_class)
 
     def release(self, lock_class: LockClass, key: Optional[tuple] = None) -> None:
@@ -117,8 +117,6 @@ class LockManager:
         """尝试获取锁。冲突抛 LockConflict。"""
         if lock_class == LockClass.NONE:
             return
-        if lock_class == LockClass.SYSTEM:
-            raise LockConflict(target, lock_class, "SYSTEM 本期 stub")
         tl = self._get_target_lock(target)
         tl.acquire(lock_class, key)
 

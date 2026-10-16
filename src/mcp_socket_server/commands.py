@@ -28,7 +28,8 @@ class LockClass(str, Enum):
     FILE_IO = "file_io"    # 文件读写,per-target 短排他
     SHELL = "shell"        # 命令执行,per-target 排他
     BROWSER = "browser"    # 拨测,per-target 排他
-    SYSTEM = "system"      # 版本切换/防火墙,全局排他(本期 stub)
+    SYSTEM = "system"      # 版本切换/防火墙,per-target 排他
+    REPLAY = "replay"      # pcap 回放,per-target 排他
 
 
 class Danger(str, Enum):
