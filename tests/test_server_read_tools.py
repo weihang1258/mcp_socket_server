@@ -24,3 +24,8 @@ def test_partial_failure_isfile(mock_server):
     res = isfile([mock_server.host, "127.0.0.1:1"], "/x", port=mock_server.port)
     assert res["ok"] == 1
     assert len(res["failed"]) == 1
+
+
+def test_isfile_accepts_timeout(mock_server):
+    res = isfile([mock_server.host], "/etc/hostname", port=mock_server.port, timeout=10)
+    assert res["ok"] == 1, res

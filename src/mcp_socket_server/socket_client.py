@@ -175,7 +175,7 @@ class SocketServerClient:
     def cmd_exec(self, args: str, cwd: str = None, env: dict = None,
                  wait: bool = True) -> dict:
         """datatype 1:payload {"args","cwd?","env?","wait?"} -> gzip JSON {code,stdout,stderr}。
-        wait=False 为 fire-and-forget,返回 None。"""
+        wait=False 为 fire-and-forget,返回 None。stdout 超 64KB 截断(带 stdout_truncated 标记)。"""
         payload = {"args": args, "wait": wait}
         if cwd is not None:
             payload["cwd"] = cwd
@@ -184,6 +184,11 @@ class SocketServerClient:
         logger.debug(f"cmd_exec send: dt=1 args={args[:80]!r} wait={wait}")
         self._send(1, json.dumps(payload).encode())
         result = self.recv_gzip_response()
+        if isinstance(result, dict) and isinstance(result.get("stdout"), str) \
+                and len(result["stdout"]) > 65536:
+            result["stdout"] = result["stdout"][:65536]
+            result["stdout_truncated"] = True
+            logger.debug(f"cmd_exec stdout truncated to 64KB: {args[:80]!r}")
         logger.debug(f"cmd_exec recv done: code={result.get('code') if isinstance(result, dict) else '?'}")
         return result
 

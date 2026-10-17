@@ -67,9 +67,9 @@ def test_boce_run_tool(app, mock_server):
 
 
 def test_add_remove_target(app, mock_server, tmp_path):
-    r1 = add_target("10.99.99.99", 9000, tags=["test"], note="fake")
+    r1 = add_target("10.99.99.99", 9000, tags=["test"], note="fake", force=True)  # B19 探活:假 IP 须 force
     assert r1["ok"] is True
-    r2 = add_target("10.99.99.99", 9000)  # 重复 IGNORE
+    r2 = add_target("10.99.99.99", 9000, force=True)  # 重复 IGNORE
     assert r2["ok"] is True
     # remove 无活跃锁的靶机
     r3 = remove_target("10.99.99.99", 9000)
@@ -145,3 +145,61 @@ def test_socket_listen_lifecycle(app, mock_server, tmp_path):
 
     r3 = socket_listen([mock_server.host], "clean", port=mock_server.port)
     assert r3["ok"] == 1
+
+
+def test_capture_start_false_becomes_failed(app, mock_server):
+    # B23: mock 5 返回 {"res": true}；临时改 mock 让 datatype 5 返回 false——
+    # 用 capture_stop_mode 不行，需 mock 5 分支可控：加 capture_start_mode 开关（Task 内 Step 3 mock 扩展）
+    mock_server.capture_start_mode = "fail"
+    res = capture_start([mock_server.host], path="/tmp/x.pcap", port=mock_server.port)
+    mock_server.capture_start_mode = "ok"
+    assert res["ok"] == 0, res
+    assert any("False" in f["reason"] or "业务失败" in f["reason"] for f in res["failed"]), res
+
+
+def test_capture_start_failure_releases_capture_lock(app, mock_server):
+    # B04: start 失败后同 path 的 CAPTURE 锁应已释放——再次 start 不应锁冲突而应是正常流程
+    mock_server.capture_start_mode = "fail"
+    r1 = capture_start([mock_server.host], path="/tmp/lockx.pcap", port=mock_server.port)
+    mock_server.capture_start_mode = "ok"
+    assert r1["ok"] == 0
+    lm = get_lock_manager()
+    r2 = cmd_exec([mock_server.host], "echo hi", port=mock_server.port)   # 若锁泄漏会 shell 冲突
+    assert r2["ok"] == 1, r2
+
+
+def test_capture_stop_four_state_tool(app, mock_server):
+    mock_server.capture_stop_mode = "new_fail"
+    r = capture_stop([mock_server.host], path="/tmp/f1.pcap", port=mock_server.port)
+    mock_server.capture_stop_mode = "new_ok"
+    assert r["ok"] == 0 and "停止未完成" in r["failed"][0]["reason"], r
+
+    mock_server.capture_stop_mode = "new_never"
+    r = capture_stop([mock_server.host], path="/tmp/f2.pcap", port=mock_server.port)
+    assert r["ok"] == 1, r    # 未在抓=非失败
+    assert r["results"][0]["stopped"] is False, r
+
+
+def test_results_carry_target(app, mock_server):
+    # B13: 走 _run_batch 的工具 results 带 target
+    res = cmd_exec([mock_server.host], "echo hi", port=mock_server.port)
+    assert res["results"][0].get("target") == mock_server.host, res
+    assert res["results"][0].get("stdout") == "mock_out", res
+
+
+def test_cmd_exec_wait_false_note(app, mock_server):
+    # B18: wait=False -> note 而非 null
+    res = cmd_exec([mock_server.host], "echo hi", port=mock_server.port, wait=False)
+    assert res["ok"] == 1, res
+    assert res["results"][0].get("note") == "wait=false 无返回值", res
+
+
+def test_remove_target_with_listener_rejected(app, mock_server):
+    # B16: start 登记 liveness -> remove 拒绝 -> stop 后可删
+    add_target(mock_server.host, mock_server.port, tags=["t16"])
+    socket_listen([mock_server.host], "start", listen_port=39021, port=mock_server.port)
+    r = remove_target(mock_server.host, mock_server.port)
+    assert r["ok"] is False and "监听" in r["error"], r
+    socket_listen([mock_server.host], "stop", port=mock_server.port)
+    r = remove_target(mock_server.host, mock_server.port)
+    assert r["ok"] is True, r

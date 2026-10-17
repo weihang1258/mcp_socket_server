@@ -8,7 +8,7 @@ def test_recv_text_response_version(mock_server):
     c = SocketServerClient(mock_server.host, mock_server.port)
     c.connect()
     c._send(14)
-    assert c.recv_text_response() == b'"1.3.9-mock"'
+    assert c.recv_text_response() == b'"1.7.1"'
     c.close()
 
 
@@ -143,7 +143,7 @@ def test_version_method_restored(mock_server):
     c.connect()
     try:
         v = c.version()
-        assert isinstance(v, str) and v, v   # mock 返回 "1.3.9-mock"（json 字符串）
+        assert isinstance(v, str) and v, v   # mock 返回 "1.7.1"（json 字符串）
     finally:
         c.close()
 
@@ -157,6 +157,9 @@ def test_capture_stop_four_states(mock_server):
     try:
         d = c.capture_stop("/tmp/a.pcap")
         assert d["stopped"] is True and d["pcap_complete"] is True, d
+        mock_server.capture_stop_mode = "legacy_ok"
+        d = c.capture_stop("/tmp/a2.pcap")
+        assert d["stopped"] is True and d.get("legacy") is True, d
         mock_server.capture_stop_mode = "new_never"
         d = c.capture_stop("/tmp/b.pcap")
         assert d["stopped"] is False and "note" in d, d

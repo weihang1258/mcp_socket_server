@@ -17,7 +17,7 @@ import os
 import socketserver
 import threading
 
-VERSION = "1.3.9-mock"
+VERSION = "1.7.1"
 
 
 def _compress(b: bytes) -> bytes:
@@ -135,6 +135,8 @@ class _Handler(socketserver.BaseRequestHandler):
             return json.dumps({"version": VERSION, "repo": "mock",
                                "latest_version": VERSION, "has_upgrade": False}).encode()
         if datatype == 5:
+            if getattr(self.server, "capture_start_mode", "ok") == "fail":
+                return json.dumps({"res": False}).encode()
             return json.dumps({"res": True}).encode()
         if datatype == 6:
             # 1.7.1 四态开关:实时读 server 开关(同一连接多次请求间测试会切换)
@@ -184,7 +186,11 @@ class _Handler(socketserver.BaseRequestHandler):
                                "destIp": "2.2.2.2", "destPort": 2, "protoType": 1}]).encode()
             return struct.pack("i", len(res)) + res
         if datatype == 1:
-            res = json.dumps({"code": 0, "stdout": "mock_out", "stderr": ""}).encode()
+            req = json.loads(data)
+            if req.get("wait", True):
+                res = json.dumps({"code": 0, "stdout": "mock_out", "stderr": ""}).encode()
+            else:
+                res = json.dumps(None).encode()   # 对齐真实服务端:wait=false 回 gzip(null)
             gz = _compress(res)
             return struct.pack("i", len(gz)) + gz
         if datatype == 131:
@@ -214,6 +220,7 @@ class MockSocketServer:
     replay_mode = "ok"  # 0 replay 形态开关:"ok"|"error"(0 返回 {"status":"error",...})
     listen_pid_mode = "ok"  # 171 start pid 开关:"ok"|"empty"(171 返回 {"pid":[]})
     capture_stop_mode = "new_ok"  # 6 停止形态:"new_ok"/"new_never"/"new_fail"/"legacy_ok"/"legacy_fail"
+    capture_start_mode = "ok"  # 5 开启形态:"ok"|"fail"(5 返回 {"res":false} 业务失败)
     captured_payload = None  # datatype 0 最近一次 wire payload(handler 写,测试读)
     listen_active_port = None  # 171 活跃监听端口;None=未监听(端口不一致 -> error JSON)
 
@@ -226,7 +233,7 @@ class MockSocketServer:
     def __setattr__(self, name, value):
         # handler 经 self.server(TCPServer) 读开关/写回执,运行时赋值需同步过去
         if name in ("listen_mode", "replay_mode", "listen_pid_mode",
-                    "capture_stop_mode"):
+                    "capture_stop_mode", "capture_start_mode"):
             srv = self.__dict__.get("_srv")
             if srv is not None:
                 setattr(srv, name, value)
@@ -252,6 +259,8 @@ class MockSocketServer:
     @listen_active_port.setter
     def listen_active_port(self, value):
         self.__dict__["listen_active_port"] = value
+        if self._srv is not None:
+            self._srv.listen_active_port = value
 
     def start(self):
         self._srv = socketserver.ThreadingTCPServer((self.host, 0), _Handler)
@@ -260,6 +269,7 @@ class MockSocketServer:
         self._srv.replay_mode = self.replay_mode
         self._srv.listen_pid_mode = self.listen_pid_mode
         self._srv.capture_stop_mode = self.capture_stop_mode
+        self._srv.capture_start_mode = self.capture_start_mode
         self.port = self._srv.server_address[1]
         self._thread = threading.Thread(target=self._srv.serve_forever, daemon=True)
         self._thread.start()

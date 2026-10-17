@@ -28,6 +28,6 @@ def test_mock_serves_version():
             except socket.timeout:
                 break
         s.close()
-        assert json.loads(data) == "1.3.9-mock"
+        assert json.loads(data) == "1.7.1"
     finally:
         srv.stop()
