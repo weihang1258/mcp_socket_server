@@ -137,9 +137,23 @@ class _Handler(socketserver.BaseRequestHandler):
         if datatype == 5:
             return json.dumps({"res": True}).encode()
         if datatype == 6:
-            return json.dumps({"res": True}).encode()
+            # 1.7.1 四态开关:实时读 server 开关(同一连接多次请求间测试会切换)
+            mode = getattr(self.server, "capture_stop_mode", "new_ok")
+            if mode == "new_ok":
+                return json.dumps({"path": json.loads(data)["path"], "stopped": True,
+                                   "exitcode": 0, "pcap_complete": True}).encode()
+            if mode == "new_never":
+                return json.dumps({"stopped": False,
+                                   "note": "no active capture for path"}).encode()
+            if mode == "new_fail":
+                return json.dumps({"stopped": False,
+                                   "error": "停止未完成（停止线程超时），实例保留可重试"}).encode()
+            if mode == "legacy_ok":
+                return json.dumps({"res": True}).encode()
+            return json.dumps({"res": False}).encode()   # legacy_fail
         # 长度前缀类
         if datatype == 0:
+            self.server.captured_payload = data.decode("utf-8", "replace")
             if self.replay_mode == "error":
                 return json.dumps({"status": "error", "message": "missing uplink_iface"}).encode()
             return json.dumps({"total_files": 1, "total_packets": 10,
@@ -151,7 +165,20 @@ class _Handler(socketserver.BaseRequestHandler):
         if datatype == 171:
             if self.listen_pid_mode == "empty":
                 return json.dumps({"pid": []}).encode()
+            active = getattr(self.server, "listen_active_port", None)
+            req_port = json.loads(data).get("port")
+            if active and req_port != active:
+                return json.dumps({"error": "已有监听运行在端口 %d，请先停止(datatype 175)"
+                                   % active}).encode()
+            self.server.listen_active_port = req_port
             return json.dumps({"pid": ["12345"]}).encode()
+        if datatype == 175:
+            # socket_listen stop:listen_mode == "error" 时返回 error JSON(复用形态)
+            # 实时读 server 开关(测试在同一连接的两次 stop 之间切换)
+            if getattr(self.server, "listen_mode", "ok") == "error":
+                return json.dumps({"error": "未启动监听"}).encode()
+            self.server.listen_active_port = None
+            return b"ok"
         if datatype == 200:
             res = json.dumps([{"pcap": "a.pcap", "srcIp": "1.1.1.1", "srcPort": 1,
                                "destIp": "2.2.2.2", "destPort": 2, "protoType": 1}]).encode()
@@ -183,9 +210,12 @@ class _Handler(socketserver.BaseRequestHandler):
 
 
 class MockSocketServer:
-    listen_mode = "ok"  # 174 fetch 形态开关:"ok"|"error"(174 返回 {"error":...} JSON)
+    listen_mode = "ok"  # 174 fetch 形态开关:"ok"|"error"(174/175 返回 {"error":...} JSON)
     replay_mode = "ok"  # 0 replay 形态开关:"ok"|"error"(0 返回 {"status":"error",...})
     listen_pid_mode = "ok"  # 171 start pid 开关:"ok"|"empty"(171 返回 {"pid":[]})
+    capture_stop_mode = "new_ok"  # 6 停止形态:"new_ok"/"new_never"/"new_fail"/"legacy_ok"/"legacy_fail"
+    captured_payload = None  # datatype 0 最近一次 wire payload(handler 写,测试读)
+    listen_active_port = None  # 171 活跃监听端口;None=未监听(端口不一致 -> error JSON)
 
     def __init__(self):
         self._srv = None
@@ -194,12 +224,34 @@ class MockSocketServer:
         self.port = 0
 
     def __setattr__(self, name, value):
-        # handler 经 self.server(TCPServer).listen_mode 读开关,运行时赋值需同步过去
-        if name in ("listen_mode", "replay_mode", "listen_pid_mode"):
+        # handler 经 self.server(TCPServer) 读开关/写回执,运行时赋值需同步过去
+        if name in ("listen_mode", "replay_mode", "listen_pid_mode",
+                    "capture_stop_mode"):
             srv = self.__dict__.get("_srv")
             if srv is not None:
                 setattr(srv, name, value)
         super().__setattr__(name, value)
+
+    @property
+    def captured_payload(self):
+        # handler 写在 TCPServer 实例上;wrapper 透传,避免 wrapper 副本遮蔽
+        if self._srv is not None and "captured_payload" in self._srv.__dict__:
+            return self._srv.captured_payload
+        return self.__dict__.get("captured_payload")
+
+    @captured_payload.setter
+    def captured_payload(self, value):
+        self.__dict__["captured_payload"] = value
+
+    @property
+    def listen_active_port(self):
+        if self._srv is not None and "listen_active_port" in self._srv.__dict__:
+            return self._srv.listen_active_port
+        return self.__dict__.get("listen_active_port")
+
+    @listen_active_port.setter
+    def listen_active_port(self, value):
+        self.__dict__["listen_active_port"] = value
 
     def start(self):
         self._srv = socketserver.ThreadingTCPServer((self.host, 0), _Handler)
@@ -207,6 +259,7 @@ class MockSocketServer:
         self._srv.listen_mode = self.listen_mode  # 同步开关(默认 "ok")
         self._srv.replay_mode = self.replay_mode
         self._srv.listen_pid_mode = self.listen_pid_mode
+        self._srv.capture_stop_mode = self.capture_stop_mode
         self.port = self._srv.server_address[1]
         self._thread = threading.Thread(target=self._srv.serve_forever, daemon=True)
         self._thread.start()

@@ -23,6 +23,11 @@ class Registry:
             UNIQUE(host, port)
         )""")
         self._conn.commit()
+        # v0.2.1: listen liveness 标记（B16：有活跃监听的靶机 remove_target 拒绝）
+        cols = [r[1] for r in self._conn.execute("PRAGMA table_info(targets)").fetchall()]
+        if "listen_liveness" not in cols:
+            self._conn.execute("ALTER TABLE targets ADD COLUMN listen_liveness INTEGER NOT NULL DEFAULT 0")
+            self._conn.commit()
 
     def add_target(self, host: str, port: int = 9000,
                    tags: Optional[list[str]] = None,
@@ -45,6 +50,20 @@ class Registry:
             if cur.rowcount == 0:
                 return {"ok": False, "error": "靶机不存在"}
             return {"ok": True}
+
+    def set_listen_liveness(self, host: str, alive: bool, port: int = 9000) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE targets SET listen_liveness=? WHERE host=? AND port=?",
+                (1 if alive else 0, host, port))
+            self._conn.commit()
+
+    def get_listen_liveness(self, host: str, port: int = 9000) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT listen_liveness FROM targets WHERE host=? AND port=?",
+                (host, port)).fetchone()
+            return bool(row and row[0])
 
     def list_targets(self, tags: Optional[list[str]] = None) -> list[dict]:
         with self._lock:

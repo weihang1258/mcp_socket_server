@@ -61,3 +61,14 @@ class TestRegistry:
         reg.add_target("10.0.0.1", 9000)  # IGNORE
         targets = reg.list_targets()
         assert len([t for t in targets if t["host"] == "10.0.0.1"]) == 1
+
+
+def test_listen_liveness(tmp_path):
+    from mcp_socket_server.registry import Registry
+    reg = Registry(str(tmp_path / "r.db"))
+    reg.add_target("10.0.0.1")   # liveness 是 UPDATE 语义,先注册再置位
+    assert reg.get_listen_liveness("10.0.0.1") is False
+    reg.set_listen_liveness("10.0.0.1", True)
+    assert reg.get_listen_liveness("10.0.0.1") is True
+    reg.set_listen_liveness("10.0.0.1", False)
+    assert reg.get_listen_liveness("10.0.0.1") is False

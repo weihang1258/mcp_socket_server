@@ -135,3 +135,70 @@ def test_socket_listen_fetch_ok_and_error(mock_server):
     finally:
         c2.close()
         mock_server.listen_mode = "ok"
+
+
+def test_version_method_restored(mock_server):
+    from mcp_socket_server.socket_client import SocketServerClient
+    c = SocketServerClient(mock_server.host, mock_server.port)
+    c.connect()
+    try:
+        v = c.version()
+        assert isinstance(v, str) and v, v   # mock 返回 "1.3.9-mock"（json 字符串）
+    finally:
+        c.close()
+
+
+def test_capture_stop_four_states(mock_server):
+    from mcp_socket_server.socket_client import SocketServerClient
+    # mock 需要 capture_stop_mode 开关: "new_ok"/"new_never"/"new_fail"/"legacy_ok"/"legacy_fail"
+    # (实现见 mock 扩展)默认 "new_ok"
+    c = SocketServerClient(mock_server.host, mock_server.port)
+    c.connect()
+    try:
+        d = c.capture_stop("/tmp/a.pcap")
+        assert d["stopped"] is True and d["pcap_complete"] is True, d
+        mock_server.capture_stop_mode = "new_never"
+        d = c.capture_stop("/tmp/b.pcap")
+        assert d["stopped"] is False and "note" in d, d
+        mock_server.capture_stop_mode = "new_fail"
+        d = c.capture_stop("/tmp/c.pcap")
+        assert d["stopped"] is False and "error" in d, d
+        mock_server.capture_stop_mode = "legacy_fail"
+        d = c.capture_stop("/tmp/d.pcap")
+        assert d["stopped"] is False and "legacy" in d, d
+    finally:
+        c.close()
+        mock_server.capture_stop_mode = "new_ok"
+
+
+def test_socket_listen_stop_action(mock_server):
+    from mcp_socket_server.socket_client import SocketServerClient
+    c = SocketServerClient(mock_server.host, mock_server.port)
+    c.connect()
+    try:
+        assert c.socket_listen("stop") == b"ok"
+        mock_server.listen_mode = "error"   # 175 error 形态复用
+        try:
+            c.socket_listen("stop")
+            assert False, "should raise"
+        except ConnectionError:
+            pass
+    finally:
+        c.close()
+        mock_server.listen_mode = "ok"
+
+
+def test_replay_force_port_zero_omitted(mock_server):
+    from mcp_socket_server.socket_client import SocketServerClient
+    c = SocketServerClient(mock_server.host, mock_server.port)
+    c.connect()
+    try:
+        # mock 的 datatype 0 handler 记录最近 payload(captured_payload)
+        c.replay_run(["/tmp/a.pcap"], "eth0", "eth1", force_sport=0, force_dport=0)
+        payload = json.loads(mock_server.captured_payload)
+        assert "force_sport" not in payload and "force_dport" not in payload, payload
+        c.replay_run(["/tmp/a.pcap"], "eth0", "eth1", force_sport=12345)
+        payload = json.loads(mock_server.captured_payload)
+        assert payload.get("force_sport") == 12345, payload
+    finally:
+        c.close()

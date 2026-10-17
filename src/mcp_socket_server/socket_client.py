@@ -150,6 +150,12 @@ class SocketServerClient:
         return self._recv_until_timeout()
 
     # ===== 只读便捷方法 =====
+    def version(self) -> str:
+        """datatype 14。v0.2.1 恢复（仅 socket_listen start 内部探测靶机版本用，
+        不暴露 MCP 工具）。服务端返回 json.dumps(VERSION) 带引号 JSON 字符串。"""
+        self._send(14)
+        return json.loads(self.recv_text_response().decode("utf-8", "replace"))
+
     def isfile(self, path: str) -> bool:
         """datatype 7:payload {"file": path}(字段名对齐 netutils.isfile(file))"""
         self._send(7, json.dumps({"file": path}).encode())
@@ -193,10 +199,19 @@ class SocketServerClient:
         self._send(5, json.dumps(payload).encode())
         return json.loads(self.recv_text_response().decode("utf-8", "replace")).get("res", False)
 
-    def capture_stop(self, path: str) -> bool:
-        """datatype 6:payload {"path"}。"""
+    def capture_stop(self, path: str) -> dict:
+        """datatype 6。1.7.1 四态 JSON：stopped/exitcode/pcap_complete/note/error；
+        旧靶机 {"res": bool} 转 legacy 形态（res:false=真失败，映射 error）。"""
         self._send(6, json.dumps({"path": path}).encode())
-        return json.loads(self.recv_text_response().decode("utf-8", "replace")).get("res", False)
+        data = json.loads(self.recv_text_response().decode("utf-8", "replace"))
+        if isinstance(data, dict) and "stopped" in data:
+            return data                      # 新形态（1.7.1）
+        if isinstance(data, dict) and "res" in data:
+            if data["res"]:
+                return {"stopped": True, "legacy": True}
+            return {"stopped": False, "legacy": True,
+                    "error": "停止未完成（旧版语义），可重试"}
+        return {"stopped": False, "error": f"无法解析的服务端响应: {data!r}"}
 
     def boce_run(self, url: str, count: int = 1, interval: int = 0,
                  thread_count: int = 1, timeout: int = 3,
@@ -227,9 +242,9 @@ class SocketServerClient:
             payload["force_ip_src"] = force_ip_src
         if force_ip_dst is not None:
             payload["force_ip_dst"] = force_ip_dst
-        if force_sport is not None:
+        if force_sport:
             payload["force_sport"] = force_sport
-        if force_dport is not None:
+        if force_dport:
             payload["force_dport"] = force_dport
         self._send(0, json.dumps(payload).encode())
         result = json.loads(self.recv_text_response().decode("utf-8", "replace"))
@@ -258,6 +273,12 @@ class SocketServerClient:
             resp = self.recv_ok()
             if resp != b"ok":
                 raise ConnectionError(f"listen clean failed: resp={resp!r}")
+            return resp
+        if action == "stop":
+            self._send(175)
+            resp = self.recv_ok()
+            if resp != b"ok":
+                raise ConnectionError(f"listen stop failed: {resp!r}")
             return resp
         if action == "save":
             if not file:
