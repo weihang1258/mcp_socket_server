@@ -13,12 +13,15 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+import os
 import socket
 import struct
 from typing import Optional
 
 logger = logging.getLogger(__name__)
-DEFAULT_TIMEOUT = 30
+# 单靶机 socket 操作默认超时秒数。优先级:环境变量 MCP_DEFAULT_TIMEOUT > 30。
+# config.yaml 的 default_timeout 供部署参考(两处需一致),本批以 env 落地。
+DEFAULT_TIMEOUT = int(os.environ.get("MCP_DEFAULT_TIMEOUT", "30"))
 
 
 def compress_gzip(b: bytes) -> bytes:

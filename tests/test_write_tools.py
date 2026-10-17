@@ -180,6 +180,32 @@ def test_capture_stop_four_state_tool(app, mock_server):
     assert r["results"][0]["stopped"] is False, r
 
 
+def test_capture_stop_timeout_passthrough(app, mock_server, monkeypatch):
+    # B2 评审遗留:capture_stop 工具的 timeout 须透传给 pool.acquire(socket_timeout=...)
+    seen: dict = {}
+
+    from mcp_socket_server import pool as pool_mod
+
+    real_get_pool = pool_mod.Scheduler.get_pool
+
+    def spy_get_pool(self, host, port=9000):
+        p = real_get_pool(self, host, port)
+        real_acquire = p.acquire
+
+        def spy_acquire(timeout=pool_mod.BORROW_TIMEOUT, socket_timeout=None):
+            seen["socket_timeout"] = socket_timeout
+            return real_acquire(socket_timeout=socket_timeout)
+
+        monkeypatch.setattr(p, "acquire", spy_acquire)
+        return p
+
+    monkeypatch.setattr(pool_mod.Scheduler, "get_pool", spy_get_pool)
+    r = capture_stop([mock_server.host], path="/tmp/tmo.pcap",
+                     port=mock_server.port, timeout=77)
+    assert r["ok"] >= 0, r  # 不关心四态结果,只断言透传
+    assert seen.get("socket_timeout") == 77, seen
+
+
 def test_results_carry_target(app, mock_server):
     # B13: 走 _run_batch 的工具 results 带 target
     res = cmd_exec([mock_server.host], "echo hi", port=mock_server.port)

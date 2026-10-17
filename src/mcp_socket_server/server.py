@@ -363,7 +363,7 @@ def capture_stop(targets: Targets, path: str = "/home/tmp/tmp.pcap",
 
     def run_one(host_port: str) -> TargetResult:
         pool = sched.get_pool(host_port, port)
-        client = pool.acquire(socket_timeout=30)
+        client = pool.acquire(socket_timeout=int(timeout))
         healthy = True
         try:
             d = client.capture_stop(path)

@@ -282,6 +282,12 @@ LLM 会调 `isfile(targets=["10.12.131.32"], path="/etc/hostname")`,返回是否
 
 ## 8. 工具列表(12 个)
 
+### 0.2.1 变更说明
+
+- `capture_stop` 四态判定:正常停止返回 `stopped/exitcode/pcap_complete`,`pcap_complete=false` 记为 failed(pcap 可能不完整);未在抓的路径返回 `stopped=false + note`(幂等,非错误);停止失败返回可重试 error。旧靶机(< 1.7.1)的 `{"res": bool}` 自动映射为 legacy 形态。
+- `socket_listen` 新增 `stop` 动作(datatype 175,需 socket_server ≥ 1.7.1),并在监听期间登记活跃度,`remove_target` 对有监听的靶机拒绝移除。
+- 9 个业务工具统一支持 `timeout` 参数(每靶机 socket 操作超时秒数),`DEFAULT_TIMEOUT` 可用环境变量 `MCP_DEFAULT_TIMEOUT` 或 config.yaml `default_timeout` 调整(默认 30)。
+
 ### 0.2.0 变更说明
 
 - 工具由 17 收敛为 12:删除 `version_query` / `version_detail` / `routeinfo` / `command_exists` / `filesize` / `file_upload` / `file_download` 共 7 个,新增 `replay_run` / `socket_listen` 2 个。

@@ -15,6 +15,7 @@ DEFAULTS: dict[str, Any] = {
     "audit_retention_days": 90,
     "download_dir": "./downloads",
     "log_level": "INFO",
+    "default_timeout": 30,
     "pool": {"max_conn_per_target": 5, "idle_timeout": 600,
              "borrow_timeout": 10, "max_global_concurrency": 50},
     "cmd_exec_whitelist": [],
@@ -30,6 +31,7 @@ class Config:
     audit_retention_days: int
     download_dir: str
     log_level: str
+    default_timeout: int
     pool: dict
     cmd_exec_whitelist: list
 
@@ -61,5 +63,6 @@ def load_config(path: str | None = None) -> Config:
                   behind_proxy=data["behind_proxy"],
                   audit_retention_days=data["audit_retention_days"],
                   download_dir=data["download_dir"], log_level=data["log_level"],
+                  default_timeout=data["default_timeout"],
                   pool=data["pool"],
                   cmd_exec_whitelist=data["cmd_exec_whitelist"])
