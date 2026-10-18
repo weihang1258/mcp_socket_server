@@ -21,9 +21,12 @@ class LockConflict(Exception):
         self.target = target
         self.lock_class = lock_class
         self.key = key
-        parts = [f"靶机 {target}", f"锁类 {lock_class.value}"]
-        if key:
-            parts.append(f"key={key}")
+        self._rebuild_message()
+
+    def _rebuild_message(self):
+        parts = [f"靶机 {self.target}", f"锁类 {self.lock_class.value}"]
+        if self.key:
+            parts.append(f"key={self.key}")
         parts.append("冲突")
         super().__init__(" ".join(parts))
 
@@ -118,7 +121,13 @@ class LockManager:
         if lock_class == LockClass.NONE:
             return
         tl = self._get_target_lock(target)
-        tl.acquire(lock_class, key)
+        try:
+            tl.acquire(lock_class, key)
+        except LockConflict as e:
+            # B07: TargetLock 内部不知 target 名(占位"?"),在此回填并重建文案
+            e.target = target
+            e._rebuild_message()
+            raise
 
     def release(self, target: str, lock_class: LockClass,
                 key: Optional[tuple] = None) -> None:

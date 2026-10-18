@@ -36,6 +36,40 @@ ToolTimeout = Annotated[int, Field(
 # 业务工具 targets 参数统一 schema:裸 IP / host:port / @tag。
 Targets = Annotated[list[str], Field(description="靶机列表(裸IP/host:port/@tag 标签)")]
 
+# ---- S01: 各业务参数字段级说明(Annotated 复用类型) ----
+HostParam = Annotated[str, Field(description="靶机 IP 或主机名(IPv6 裸地址,自动剥方括号)")]
+PortParam = Annotated[int, Field(description="靶机 socket_server TCP 端口(默认 9000)")]
+PathParam = Annotated[str, Field(description="靶机上的绝对路径")]
+IfaceParam = Annotated[str, Field(description="网卡名,如 eth0;留空自动取默认路由网卡")]
+PcapDirParam = Annotated[str, Field(description="靶机上的 pcap 目录绝对路径")]
+CmdArgs = Annotated[str, Field(description="要执行的命令及参数(白名单非空时须命中前缀)")]
+CwdParam = Annotated[str, Field(description="命令工作目录(留空=默认)")]
+EnvParam = Annotated[dict | None, Field(description="命令环境变量键值对(可选)")]
+WaitParam = Annotated[bool, Field(description="true=等命令结束返回结果;false=立即返回无结果")]
+TagsParam = Annotated[list[str] | None, Field(description="标签列表,用于 @tag 选机")]
+NoteParam = Annotated[str, Field(description="备注(如机器用途)")]
+ForceParam = Annotated[bool, Field(description="true=跳过探活强制注册离线靶机")]
+ModeParam = Annotated[str, Field(description="拨测模式: 封堵/重定向 有效;弹窗未实现(恒失败);其他值按未知模式恒失败")]
+UrlParam = Annotated[str, Field(description="拨测目标 URL")]
+ChromiumParam = Annotated[str, Field(description="chromium 可执行文件路径(留空=默认 /opt/socket/chrome-linux/chrome)")]
+PcapsParam = Annotated[list[str], Field(description="靶机上 pcap 文件的绝对路径列表(需先用 HTTP 上传)")]
+UplinkIface = Annotated[str, Field(description="上行物理网卡名,如 eth0")]
+DownlinkIface = Annotated[str, Field(description="下行物理网卡名,单臂回放可与上行相同")]
+VlanParam = Annotated[int | None, Field(description="VLAN ID(可选,不给则不打 VLAN 标)")]
+ForceIpParam = Annotated[str | None, Field(description="强制替换 IP(可选,如 172.31.138.158)")]
+ListenPortParam = Annotated[int, Field(description="仅 start 用:监听端口(默认 30001)")]
+ListenFileParam = Annotated[str, Field(description="仅 save 用:数据保存到靶机的绝对路径")]
+MaxBytesParam = Annotated[int, Field(description="仅 fetch 用:返回内容上限(解压后明文字节),超限截断并落盘靶机")]
+ActionParam = Annotated[str, Field(description="start=启动返回pid / clean=清空已收数据 / save=已收数据保存到靶机文件 / fetch=取回已收数据 / stop=停止当前监听")]
+ExtendedParam = Annotated[str, Field(description="tcpdump 扩展过滤表达式(传给抓包进程,留空=不过滤)")]
+SingleQueueParam = Annotated[bool, Field(description="true=单队列收包(收包序=线序,默认)")]
+CountParam = Annotated[int, Field(description="拨测次数(默认 1)")]
+IntervalParam = Annotated[int, Field(description="拨测间隔秒(默认 0)")]
+ThreadCountParam = Annotated[int, Field(description="拨测并发线程数(默认 1)")]
+MbpsParam = Annotated[int, Field(description="回放限速 Mbps,0=不限速(默认)")]
+ForceSportParam = Annotated[int, Field(description="强制替换源端口(0=不改写,默认)")]
+ForceDportParam = Annotated[int, Field(description="强制替换目的端口(0=不改写,默认)")]
+
 
 def _setup_logging(level: str) -> None:
     """统一配置根 logger + 关键子 logger。DEBUG 时让 socket_client/pool/uvicorn 也详细输出。"""
@@ -56,6 +90,9 @@ _setup_logging("INFO")  # 默认 INFO;init_server 会按 config 重设
 mcp = FastMCP("mcp-socket-server",
               transport_security=TransportSecuritySettings(
                   enable_dns_rebinding_protection=False))
+# N5: FastMCP 1.28 不透传 version 到 initialize 的 serverInfo(回落 mcp SDK 版本),
+# 构造后直设底层 Server.version,让客户端可辨识桥版本
+mcp._mcp_server.version = "0.2.2"
 
 _lock_manager: Optional[LockManager] = None
 _registry: Any = None
@@ -214,9 +251,9 @@ def list_targets(description: CallDescription = "") -> dict:
 
 
 @mcp.tool()
-def add_target(host: str, port: int = 9000, tags: list[str] | None = None,
-               note: str = "", description: CallDescription = "",
-               force: bool = False) -> dict:
+def add_target(host: HostParam, port: PortParam = 9000, tags: TagsParam = None,
+               note: NoteParam = "", description: CallDescription = "",
+               force: ForceParam = False) -> dict:
     """注册新靶机。tags 用于 @tag 选机。注册前 TCP 探活（不通拒绝，force=True 跳过）。"""
     import socket as _socket
     host_clean = host.strip("[]")   # IPv6 方括号剥除
@@ -232,7 +269,7 @@ def add_target(host: str, port: int = 9000, tags: list[str] | None = None,
 
 
 @mcp.tool(annotations={"destructiveHint": True})
-def remove_target(host: str, port: int = 9000,
+def remove_target(host: HostParam, port: PortParam = 9000,
                   description: CallDescription = "") -> dict:
     """移除靶机(有活跃锁或活跃监听时拒绝)。"""
     if _registry is None:
@@ -245,7 +282,7 @@ def remove_target(host: str, port: int = 9000,
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
-def isfile(targets: Targets, path: str, port: int = 9000,
+def isfile(targets: Targets, path: PathParam, port: PortParam = 9000,
            timeout: ToolTimeout = 15,
            description: CallDescription = "") -> dict:
     """检查靶机文件是否存在(datatype 7,只读)。
@@ -261,7 +298,7 @@ def isfile(targets: Targets, path: str, port: int = 9000,
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
-def isdir(targets: Targets, path: str, port: int = 9000,
+def isdir(targets: Targets, path: PathParam, port: PortParam = 9000,
           timeout: ToolTimeout = 15,
           description: CallDescription = "") -> dict:
     """检查目录是否存在(datatype 8,只读)。"""
@@ -273,7 +310,7 @@ def isdir(targets: Targets, path: str, port: int = 9000,
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
-def pcap_flow_extract(targets: Targets, pcap_dir: str, port: int = 9000,
+def pcap_flow_extract(targets: Targets, pcap_dir: PcapDirParam, port: PortParam = 9000,
                       timeout: ToolTimeout = 30,
                       description: CallDescription = "") -> dict:
     """提取 pcap 五元组流(datatype 200,只读)。pcap 可先经 HTTP 下载到本地分析:
@@ -298,8 +335,8 @@ def pcap_flow_extract(targets: Targets, pcap_dir: str, port: int = 9000,
 # ==================== 写工具 ====================
 
 @mcp.tool(annotations={"destructiveHint": True})
-def cmd_exec(targets: Targets, args: str, cwd: str = "", env: dict | None = None,
-             wait: bool = True, port: int = 9000,
+def cmd_exec(targets: Targets, args: CmdArgs, cwd: CwdParam = "", env: EnvParam = None,
+             wait: WaitParam = True, port: PortParam = 9000,
              timeout: ToolTimeout = 60,
              description: CallDescription = "") -> dict:
     """执行命令(datatype 1,SHELL/DANGER,白名单校验后转发)。
@@ -327,8 +364,8 @@ def cmd_exec(targets: Targets, args: str, cwd: str = "", env: dict | None = None
 
 
 @mcp.tool()
-def capture_start(targets: Targets, iface: str = "", path: str = "/home/tmp/tmp.pcap",
-                  extended: str = "", single_queue: bool = True, port: int = 9000,
+def capture_start(targets: Targets, iface: IfaceParam = "", path: PathParam = "/home/tmp/tmp.pcap",
+                  extended: ExtendedParam = "", single_queue: SingleQueueParam = True, port: PortParam = 9000,
                   timeout: ToolTimeout = 30,
                   description: CallDescription = "") -> dict:
     """AF_PACKET 嗅探抓包（datatype 5，CAPTURE 持锁；独立子进程，ps 中无 tcpdump 子进程属正常）。
@@ -349,8 +386,8 @@ def capture_start(targets: Targets, iface: str = "", path: str = "/home/tmp/tmp.
 
 
 @mcp.tool(annotations={"destructiveHint": True})
-def capture_stop(targets: Targets, path: str = "/home/tmp/tmp.pcap",
-                 port: int = 9000,
+def capture_stop(targets: Targets, path: PathParam = "/home/tmp/tmp.pcap",
+                 port: PortParam = 9000,
                  timeout: ToolTimeout = 30,
                  description: CallDescription = "") -> dict:
     """停止抓包(datatype 6)。返回四态：stopped/exitcode/pcap_complete；
@@ -371,11 +408,14 @@ def capture_stop(targets: Targets, path: str = "/home/tmp/tmp.pcap",
             #   stopped:True + pcap_complete:False -> failed（pcap 可能不完整）
             #   stopped:False + error -> failed（可重试）
             #   stopped:False + note -> 非失败（幂等明示）
+            # B03 呈现: failed 时 data 仍带结构化字段,results 保留完整视图(不只 reason 文本)
             if d.get("stopped") and d.get("pcap_complete") is False:
+                d["warning"] = "pcap 可能不完整/未排序"
                 return TargetResult(target=host_port, ok=False,
-                                    error=f"pcap 可能不完整/未排序(exitcode={d.get('exitcode')})")
+                                    error=f"pcap 可能不完整/未排序(exitcode={d.get('exitcode')})",
+                                    data=d)
             if d.get("stopped") is False and d.get("error"):
-                return TargetResult(target=host_port, ok=False, error=d["error"])
+                return TargetResult(target=host_port, ok=False, error=d["error"], data=d)
             return TargetResult(target=host_port, ok=True, data=d)
         except Exception as e:
             healthy = False
@@ -412,22 +452,29 @@ def capture_stop(targets: Targets, path: str = "/home/tmp/tmp.pcap",
 
     return {"ok": sum(1 for r in results if r.ok),
             "failed": _failed(results),
-            "results": [_wrap(r) for r in results if r.ok]}
+            "results": [_wrap(r) for r in results if r.ok],
+            # B03 呈现: failed 项也保留结构化数据(如有),调用方可程序化读取
+            # stopped/exitcode/pcap_complete,而非仅 reason 文本
+            **({"failed_details": [{"target": r.target, **r.data}
+                                   for r in results if not r.ok and isinstance(r.data, dict)]}
+               if any(not r.ok and isinstance(r.data, dict) for r in results) else {})}
 
 
 @mcp.tool()
-def boce_run(targets: Targets, url: str, count: int = 1, interval: int = 0,
-             thread_count: int = 1, http_timeout: int = 3, mode: str = "封堵",
-             chromium_path: str = "", port: int = 9000,
+def boce_run(targets: Targets, url: UrlParam, count: CountParam = 1, interval: IntervalParam = 0,
+             thread_count: ThreadCountParam = 1, mode: ModeParam = "封堵",
+             chromium_path: ChromiumParam = "", port: PortParam = 9000,
              timeout: ToolTimeout = 60,
              description: CallDescription = "") -> dict:
     """拨测(datatype 131,BROWSER)。
-    mode 仅"封堵/重定向"有判定实现；"弹窗"未实现（恒失败）；其他值按未知模式恒失败。"""
+    mode 仅"封堵/重定向"有判定实现；"弹窗"未实现（恒失败）；其他值按未知模式恒失败。
+    timeout 一个参数表示两层超时：既约束单靶机整体操作(connect+执行+返回)，拨测内部
+    的 HTTP 请求超时也取该值（0.2.2 起恢复单参数；0.2.1 曾拆为 http_timeout，已废弃）。"""
     resolved = _resolve_targets(targets)
 
     def run_one(client):
         return client.boce_run(url, count=count, interval=interval,
-                               thread_count=thread_count, timeout=http_timeout,
+                               thread_count=thread_count, timeout=timeout,
                                mode=mode,
                                chromium_path=chromium_path or None)
 
@@ -439,12 +486,12 @@ def boce_run(targets: Targets, url: str, count: int = 1, interval: int = 0,
 
 
 @mcp.tool()
-def replay_run(targets: Targets, pcaps: list[str], uplink_iface: str,
-               downlink_iface: str, uplink_vlan: int | None = None,
-               downlink_vlan: int | None = None, mbps: int = 0,
-               force_ip_src: str | None = None, force_ip_dst: str | None = None,
-               force_sport: int = 0, force_dport: int = 0,
-               port: int = 9000,
+def replay_run(targets: Targets, pcaps: PcapsParam, uplink_iface: UplinkIface,
+               downlink_iface: DownlinkIface, uplink_vlan: VlanParam = None,
+               downlink_vlan: VlanParam = None, mbps: MbpsParam = 0,
+               force_ip_src: ForceIpParam = None, force_ip_dst: ForceIpParam = None,
+               force_sport: ForceSportParam = 0, force_dport: ForceDportParam = 0,
+               port: PortParam = 9000,
                timeout: ToolTimeout = 120,
                description: CallDescription = "") -> dict:
     """在靶机回放 pcap 流量文件(scapy 双接口收发,支持限速/改五元组)。需先用 HTTP 上传把 pcap 传到靶机: curl -F "path=/home/tmp/x.pcap" -F "file=@x.pcap" http://<host>:9001/files。回放与抓包/拨测同靶机互斥;回放+抓包请分属两台靶机(跨机拓扑)。
@@ -472,8 +519,8 @@ def replay_run(targets: Targets, pcaps: list[str], uplink_iface: str,
 
 
 @mcp.tool()
-def socket_listen(targets: Targets, action: str, listen_port: int = 30001,
-                  file: str = "", max_bytes: int = 1048576, port: int = 9000,
+def socket_listen(targets: Targets, action: ActionParam, listen_port: ListenPortParam = 30001,
+                  file: ListenFileParam = "", max_bytes: MaxBytesParam = 1048576, port: PortParam = 9000,
                   timeout: ToolTimeout = 30,
                   description: CallDescription = "") -> dict:
     """在靶机启动 TCP 端口监听接收流量(TCP 监听不接收无握手的裸回放流,回放对比需回放侧重建会话或用 UDP)。

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-socket-server"
-version = "0.2.1"
+version = "0.2.2"
 description = "MCP server bridging LLM platforms to socket_server targets (batch command/capture/boce)"
 requires-python = ">=3.10"
 readme = "README.md"

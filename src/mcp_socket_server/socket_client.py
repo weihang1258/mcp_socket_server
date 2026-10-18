@@ -152,6 +152,21 @@ class SocketServerClient:
         """b'ok'/b'error':15/172/173。"""
         return self._recv_until_timeout()
 
+    @staticmethod
+    def _decode_listen_error(resp: bytes) -> str:
+        """B09/N4: 1.7.1 起 172/173/175 错误为 {"error": "..."} JSON(1.6.x 为裸 b'error')。
+        解码出中文文案;解不出就原文返回。"""
+        try:
+            msg = json.loads(resp.decode("utf-8", "replace"))
+            if isinstance(msg, dict) and "error" in msg:
+                return msg["error"]
+        except ValueError:
+            pass
+        try:
+            return resp.decode("utf-8", "replace")
+        except Exception:
+            return repr(resp)
+
     # ===== 只读便捷方法 =====
     def version(self) -> str:
         """datatype 14。v0.2.1 恢复（仅 socket_listen start 内部探测靶机版本用，
@@ -225,13 +240,18 @@ class SocketServerClient:
                  thread_count: int = 1, timeout: int = 3,
                  mode: str = "封堵", chromium_path: str = None) -> dict:
         """datatype 131:payload {"url","count?","interval?","thread_count?","timeout?",
-        "mode?","chromium_path?"}。响应 [4B len][json],返回 {total,success,fail,...}。"""
+        "mode?","chromium_path?"}。响应 [4B len][json],返回 {total,success,fail,...}。
+        N1: 服务端前置失败(chromium 下载/依赖安装失败)返回 {"error": "..."},判失败抛错
+        而非原样透传(否则 _run_batch 会把含 error 的 dict 计为 ok)。"""
         payload = {"url": url, "count": count, "interval": interval,
                    "thread_count": thread_count, "timeout": timeout, "mode": mode}
         if chromium_path is not None:
             payload["chromium_path"] = chromium_path
         self._send(131, json.dumps(payload).encode())
-        return self.recv_lenprefixed_json()
+        data = self.recv_lenprefixed_json()
+        if isinstance(data, dict) and "error" in data:
+            raise ConnectionError(f"boce failed: {data['error']}")
+        return data
 
     def replay_run(self, pcaps: list, uplink_iface: str, downlink_iface: str,
                    uplink_vlan=None, downlink_vlan=None, mbps: int = 0,
@@ -280,13 +300,13 @@ class SocketServerClient:
             self._send(172)
             resp = self.recv_ok()
             if resp != b"ok":
-                raise ConnectionError(f"listen clean failed: resp={resp!r}")
+                raise ConnectionError(f"listen clean failed: {self._decode_listen_error(resp)}")
             return resp
         if action == "stop":
             self._send(175)
             resp = self.recv_ok()
             if resp != b"ok":
-                raise ConnectionError(f"listen stop failed: {resp!r}")
+                raise ConnectionError(f"listen stop failed: {self._decode_listen_error(resp)}")
             return resp
         if action == "save":
             if not file:
@@ -294,7 +314,7 @@ class SocketServerClient:
             self._send(173, json.dumps({"file": file}).encode())
             resp = self.recv_ok()
             if resp != b"ok":
-                raise ConnectionError(f"listen save failed: resp={resp!r}")
+                raise ConnectionError(f"listen save failed: {self._decode_listen_error(resp)}")
             return resp
         if action == "fetch":
             self._send(174)
