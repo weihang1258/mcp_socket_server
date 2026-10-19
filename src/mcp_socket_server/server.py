@@ -92,7 +92,7 @@ mcp = FastMCP("mcp-socket-server",
                   enable_dns_rebinding_protection=False))
 # N5: FastMCP 1.28 不透传 version 到 initialize 的 serverInfo(回落 mcp SDK 版本),
 # 构造后直设底层 Server.version,让客户端可辨识桥版本
-mcp._mcp_server.version = "0.2.4"
+mcp._mcp_server.version = "0.2.5"
 
 _lock_manager: Optional[LockManager] = None
 _registry: Any = None
@@ -255,7 +255,7 @@ def list_targets(description: CallDescription = "") -> dict:
     return {"targets": _registry.list_targets()}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": False, "openWorldHint": True})
 def add_target(host: HostParam, port: PortParam = 9000, tags: TagsParam = None,
                note: NoteParam = "", description: CallDescription = "",
                force: ForceParam = False) -> dict:
@@ -273,7 +273,7 @@ def add_target(host: HostParam, port: PortParam = 9000, tags: TagsParam = None,
     return _registry.add_target(host_clean, port, tags, note)
 
 
-@mcp.tool(annotations={"destructiveHint": True})
+@mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True})
 def remove_target(host: HostParam, port: PortParam = 9000,
                   description: CallDescription = "") -> dict:
     """移除靶机(有活跃锁或活跃监听时拒绝)。"""
@@ -368,7 +368,7 @@ def cmd_exec(targets: Targets, args: CmdArgs, cwd: CwdParam = "", env: EnvParam 
                       timeout=timeout if wait else min(timeout, 15))
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": False, "openWorldHint": True})
 def capture_start(targets: Targets, iface: IfaceParam = "", path: PathParam = "/home/tmp/tmp.pcap",
                   extended: ExtendedParam = "", single_queue: SingleQueueParam = True, port: PortParam = 9000,
                   timeout: ToolTimeout = 30,
@@ -397,7 +397,7 @@ def capture_start(targets: Targets, iface: IfaceParam = "", path: PathParam = "/
                       timeout=timeout)
 
 
-@mcp.tool(annotations={"destructiveHint": True})
+@mcp.tool(annotations={"destructiveHint": True, "idempotentHint": True})
 def capture_stop(targets: Targets, path: PathParam = "/home/tmp/tmp.pcap",
                  port: PortParam = 9000,
                  timeout: ToolTimeout = 30,
@@ -472,7 +472,7 @@ def capture_stop(targets: Targets, path: PathParam = "/home/tmp/tmp.pcap",
                if any(not r.ok and isinstance(r.data, dict) for r in results) else {})}
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": False, "openWorldHint": True})
 def boce_run(targets: Targets, url: UrlParam, count: CountParam = 1, interval: IntervalParam = 0,
              thread_count: ThreadCountParam = 1, mode: ModeParam = "封堵",
              chromium_path: ChromiumParam = "", port: PortParam = 9000,
@@ -481,13 +481,17 @@ def boce_run(targets: Targets, url: UrlParam, count: CountParam = 1, interval: I
     """拨测(datatype 131,BROWSER)。
     mode 仅"封堵/重定向"有判定实现；"弹窗"未实现（恒失败）；其他值按未知模式恒失败。
     timeout 一个参数表示两层超时：既约束单靶机整体操作(connect+执行+返回)，拨测内部
-    的 HTTP/goto 预算取该值扣 10s 余量（0.2.4 起内层自动扣余量，防内层 60s+sleep(3)
-    撞外层 60s 必超时；0.2.1 曾拆为 http_timeout，已废弃）。"""
+    的 HTTP/goto 预算也取该值扣 10s 余量。下限 10 秒：低于 10 秒的调用会被参数校验拒绝
+    （报 Input should be greater than or equal to 10），而非放行后必然超时。"""
     resolved = _resolve_targets(targets)
+    # N2: socket 层超时= timeout+10(给 browser 冷启动 5-8s/判定收尾留余量,
+    # 防内层失败被外层 timed out 掩盖——0.2.4 曾出现 timeout=10 弹窗 10.1s 超时)。
+    # 内层预算(拨测 HTTP/goto)= timeout-10(至少 3s)在 run_one 内计算。
+    socket_timeout = timeout + 10
 
     def run_one(client):
-        # 评审链9: 内层预算(拨测 HTTP/goto)与外层(socket timeout)同值时,
-        # 成功路径固定 asyncio.sleep(3) 会使内层 60+3 > 外层 60 必超时。扣 10s 余量。
+        # 评审链9: 内层预算(拨测 HTTP/goto)只约束 goto 一段;
+        # 详见上方 socket_timeout 注释。
         inner = max(3, timeout - 10)
         return client.boce_run(url, count=count, interval=interval,
                                thread_count=thread_count, timeout=inner,
@@ -498,10 +502,10 @@ def boce_run(targets: Targets, url: UrlParam, count: CountParam = 1, interval: I
                       lock_class=LockClass.BROWSER,
                       audit_tool="boce_run",
                       audit_params={"url": url, "count": count, "mode": mode},
-                      timeout=timeout)
+                      timeout=socket_timeout)
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": True, "openWorldHint": True})
 def replay_run(targets: Targets, pcaps: PcapsParam, uplink_iface: UplinkIface,
                downlink_iface: DownlinkIface, uplink_vlan: VlanParam = None,
                downlink_vlan: VlanParam = None, mbps: MbpsParam = 0,
@@ -534,7 +538,7 @@ def replay_run(targets: Targets, pcaps: PcapsParam, uplink_iface: UplinkIface,
                       timeout=timeout)
 
 
-@mcp.tool()
+@mcp.tool(annotations={"destructiveHint": False, "openWorldHint": True})
 def socket_listen(targets: Targets, action: ActionParam, listen_port: ListenPortParam = 30001,
                   file: ListenFileParam = "", max_bytes: MaxBytesParam = 1048576, port: PortParam = 9000,
                   timeout: ToolTimeout = 30,
