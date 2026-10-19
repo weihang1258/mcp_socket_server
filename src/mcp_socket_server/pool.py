@@ -67,6 +67,11 @@ class TargetPool:
             except OSError:
                 pass
         if reuse is not None:
+            # N8(0.2.6): 复用连接时同步 socket_timeout——此前仅新建连接生效,
+            # 复用路径沿用首建时的旧值,导致工具级 timeout 参数在 IDLE_TIMEOUT
+            # 窗口内被静默丢弃(实测 boce_run timeout=10 复用了 60s 旧连接)。
+            # client 每次 send/recv 前都会 settimeout(self.timeout),更新属性即生效。
+            reuse.timeout = socket_timeout
             return reuse
         # 新建连接(锁外):socket_timeout 同时约束 connect 与后续 recv/send;
         # 失败必须递减 _inuse,否则池计数泄漏致永久耗尽

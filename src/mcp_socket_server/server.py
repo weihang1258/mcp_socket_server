@@ -92,7 +92,7 @@ mcp = FastMCP("mcp-socket-server",
                   enable_dns_rebinding_protection=False))
 # N5: FastMCP 1.28 不透传 version 到 initialize 的 serverInfo(回落 mcp SDK 版本),
 # 构造后直设底层 Server.version,让客户端可辨识桥版本
-mcp._mcp_server.version = "0.2.5"
+mcp._mcp_server.version = "0.2.6"
 
 _lock_manager: Optional[LockManager] = None
 _registry: Any = None
@@ -479,7 +479,9 @@ def boce_run(targets: Targets, url: UrlParam, count: CountParam = 1, interval: I
              timeout: Annotated[int, Field(ge=10, description="单靶机操作超时秒数(connect+执行+返回),多靶机并行各自计时;至少 10 秒(拨测内部 HTTP/goto 预算自动扣 10s 余量)")] = 60,
              description: CallDescription = "") -> dict:
     """拨测(datatype 131,BROWSER)。
-    mode 仅"封堵/重定向"有判定实现；"弹窗"未实现（恒失败）；其他值按未知模式恒失败。
+    mode 仅"封堵/重定向"有判定实现；"弹窗"未实现（恒失败，且失败路径含 browser
+    冷启动+固定 sleep(3)，约 30s 才返回——timeout 建议 ≥ 30，否则外层先超时返回
+    timed out 而非结构化原因）；其他值按未知模式恒失败。
     timeout 一个参数表示两层超时：既约束单靶机整体操作(connect+执行+返回)，拨测内部
     的 HTTP/goto 预算也取该值扣 10s 余量。下限 10 秒：低于 10 秒的调用会被参数校验拒绝
     （报 Input should be greater than or equal to 10），而非放行后必然超时。"""

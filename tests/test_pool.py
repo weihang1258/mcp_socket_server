@@ -63,3 +63,17 @@ def test_acquire_socket_timeout_propagated(mock_server):
     pc = pool._idle[-1]
     assert pc.client.timeout == 9
     pool.close_all()
+
+
+def test_reuse_updates_socket_timeout(mock_server):
+    # N8 回归: 复用路径此前不更新 socket_timeout(沿用首建值,10 分钟窗口内工具级
+    # timeout 参数被静默丢弃)。修复后每次 acquire 都应同步 client.timeout。
+    p = TargetPool(mock_server.host, mock_server.port)
+    c1 = p.acquire(timeout=5, socket_timeout=120)
+    assert c1.timeout == 120
+    p.release(c1)
+    c2 = p.acquire(timeout=5, socket_timeout=10)
+    assert c2 is c1          # 复用同一条连接
+    assert c2.timeout == 10  # 且超时值已同步为本次调用传入的 socket_timeout
+    p.release(c2)
+    p.close_all()
