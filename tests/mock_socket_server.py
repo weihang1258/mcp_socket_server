@@ -283,8 +283,6 @@ class MockSocketServer:
         self._srv.capture_start_mode = self.capture_start_mode
         self._srv.capture_start_error = self.capture_start_error
         self._srv.boce_error = self.boce_error
-        self._srv.capture_start_error = self.capture_start_error
-        self._srv.boce_error = self.boce_error
         self.port = self._srv.server_address[1]
         self._thread = threading.Thread(target=self._srv.serve_forever, daemon=True)
         self._thread.start()

@@ -92,7 +92,7 @@ mcp = FastMCP("mcp-socket-server",
                   enable_dns_rebinding_protection=False))
 # N5: FastMCP 1.28 不透传 version 到 initialize 的 serverInfo(回落 mcp SDK 版本),
 # 构造后直设底层 Server.version,让客户端可辨识桥版本
-mcp._mcp_server.version = "0.2.3"
+mcp._mcp_server.version = "0.2.4"
 
 _lock_manager: Optional[LockManager] = None
 _registry: Any = None
@@ -476,7 +476,7 @@ def capture_stop(targets: Targets, path: PathParam = "/home/tmp/tmp.pcap",
 def boce_run(targets: Targets, url: UrlParam, count: CountParam = 1, interval: IntervalParam = 0,
              thread_count: ThreadCountParam = 1, mode: ModeParam = "封堵",
              chromium_path: ChromiumParam = "", port: PortParam = 9000,
-             timeout: ToolTimeout = 60,
+             timeout: Annotated[int, Field(ge=10, description="单靶机操作超时秒数(connect+执行+返回),多靶机并行各自计时;至少 10 秒(拨测内部 HTTP/goto 预算自动扣 10s 余量)")] = 60,
              description: CallDescription = "") -> dict:
     """拨测(datatype 131,BROWSER)。
     mode 仅"封堵/重定向"有判定实现；"弹窗"未实现（恒失败）；其他值按未知模式恒失败。
