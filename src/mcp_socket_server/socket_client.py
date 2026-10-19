@@ -211,16 +211,21 @@ class SocketServerClient:
         return result
 
     def capture_start(self, eth: str = None, path: str = None,
-                      extended: str = "", single_queue: bool = True) -> bool:
+                      extended: str = "", single_queue: bool = True) -> dict:
         """datatype 5:payload {"eth?","path?","extended?","single_queue?"}。
-        eth 为空时服务端用默认网卡(同 routeinfo 默认路由)。"""
+        eth 为空时服务端用默认网卡(同 routeinfo 默认路由)。
+        1.7.2+: 失败返回 {"res": False, "error": 原因};旧靶机 {"res": False} 无 error。
+        统一返回 dict {res, error?} 供工具层判定与透传。"""
         payload = {"extended": extended, "single_queue": single_queue}
         if eth is not None:
             payload["eth"] = eth
         if path is not None:
             payload["path"] = path
         self._send(5, json.dumps(payload).encode())
-        return json.loads(self.recv_text_response().decode("utf-8", "replace")).get("res", False)
+        data = json.loads(self.recv_text_response().decode("utf-8", "replace"))
+        if isinstance(data, dict) and "error" in data:
+            return data
+        return {"res": bool(data.get("res", False))}
 
     def capture_stop(self, path: str) -> dict:
         """datatype 6。1.7.1 四态 JSON：stopped/exitcode/pcap_complete/note/error；

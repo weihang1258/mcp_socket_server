@@ -92,7 +92,7 @@ mcp = FastMCP("mcp-socket-server",
                   enable_dns_rebinding_protection=False))
 # N5: FastMCP 1.28 不透传 version 到 initialize 的 serverInfo(回落 mcp SDK 版本),
 # 构造后直设底层 Server.version,让客户端可辨识桥版本
-mcp._mcp_server.version = "0.2.2"
+mcp._mcp_server.version = "0.2.3"
 
 _lock_manager: Optional[LockManager] = None
 _registry: Any = None
@@ -183,6 +183,11 @@ def _run_batch(
         try:
             t_fn = time.monotonic()
             data = fn(client)
+            if isinstance(data, dict) and "_error" in data:
+                # 通用失败通道: fn 返回 {"_error": 原因} -> 该 target failed 且 reason 有值
+                ok = False
+                return TargetResult(target=host_port, ok=False,
+                                    error=str(data["_error"]))
             if data is None:
                 data = {"note": "wait=false 无返回值"}   # B18
             elif data is False:
@@ -373,8 +378,15 @@ def capture_start(targets: Targets, iface: IfaceParam = "", path: PathParam = "/
     resolved = _resolve_targets(targets)
 
     def run_one(client):
-        return client.capture_start(eth=iface or None, path=path,
-                                    extended=extended, single_queue=single_queue)
+        d = client.capture_start(eth=iface or None, path=path,
+                                 extended=extended, single_queue=single_queue)
+        # 1.7.2+: 失败带原因(dict 含 error)-> {"_error": 原因} 触发 _run_batch failed(带 target);
+        # 旧靶机 res:False 无 error -> 返回 False 走 B23 泛化文案
+        if not d.get("res"):
+            if d.get("error"):
+                return {"_error": d["error"]}
+            return False
+        return d
 
     return _run_batch(resolved, port, run_one,
                       lock_class=LockClass.CAPTURE,
