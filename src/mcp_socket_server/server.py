@@ -481,12 +481,16 @@ def boce_run(targets: Targets, url: UrlParam, count: CountParam = 1, interval: I
     """拨测(datatype 131,BROWSER)。
     mode 仅"封堵/重定向"有判定实现；"弹窗"未实现（恒失败）；其他值按未知模式恒失败。
     timeout 一个参数表示两层超时：既约束单靶机整体操作(connect+执行+返回)，拨测内部
-    的 HTTP 请求超时也取该值（0.2.2 起恢复单参数；0.2.1 曾拆为 http_timeout，已废弃）。"""
+    的 HTTP/goto 预算取该值扣 10s 余量（0.2.4 起内层自动扣余量，防内层 60s+sleep(3)
+    撞外层 60s 必超时；0.2.1 曾拆为 http_timeout，已废弃）。"""
     resolved = _resolve_targets(targets)
 
     def run_one(client):
+        # 评审链9: 内层预算(拨测 HTTP/goto)与外层(socket timeout)同值时,
+        # 成功路径固定 asyncio.sleep(3) 会使内层 60+3 > 外层 60 必超时。扣 10s 余量。
+        inner = max(3, timeout - 10)
         return client.boce_run(url, count=count, interval=interval,
-                               thread_count=thread_count, timeout=timeout,
+                               thread_count=thread_count, timeout=inner,
                                mode=mode,
                                chromium_path=chromium_path or None)
 

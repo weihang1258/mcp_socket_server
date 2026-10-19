@@ -6,7 +6,7 @@ import pytest
 from mcp_socket_server.config import load_config
 from mcp_socket_server.server import (
     add_target, boce_run, capture_start, capture_stop, cmd_exec,
-    init_server, remove_target, replay_run, socket_listen,
+    init_server, isfile, remove_target, replay_run, socket_listen,
 )
 from mcp_socket_server.registry import set_registry
 from mcp_socket_server.audit import set_audit
@@ -229,3 +229,40 @@ def test_remove_target_with_listener_rejected(app, mock_server):
     socket_listen([mock_server.host], "stop", port=mock_server.port)
     r = remove_target(mock_server.host, mock_server.port)
     assert r["ok"] is True, r
+
+
+def test_capture_start_error_passthrough(app, mock_server):
+    # N3: 1.7.2 服务端 dt5 失败带原因 -> 桥透传到 reason(带 target)
+    mock_server.capture_start_error = "路径不可写: /nonexist/x.pcap"
+    res = capture_start([mock_server.host], path="/tmp/err.pcap", port=mock_server.port)
+    mock_server.capture_start_error = None
+    assert res["ok"] == 0, res
+    assert "路径不可写" in res["failed"][0]["reason"], res
+
+
+def test_lock_conflict_message_has_real_target(app, mock_server):
+    # B07: 锁冲突文案含真实靶机 IP 而非 "?"
+    from mcp_socket_server.locks import get_lock_manager, LockClass
+    res = cmd_exec([mock_server.host], "echo hi", port=mock_server.port)
+    assert res["ok"] == 1, res
+    lm = get_lock_manager()
+    host_port = mock_server.host  # _run_batch 的 target 串=resolved 后的 host(未注册 IP 原样,无端口)
+    lm.acquire(host_port, LockClass.CAPTURE, ("/tmp/occupied.pcap",))
+    try:
+        r2 = capture_start([mock_server.host], path="/tmp/occupied.pcap",
+                           port=mock_server.port)
+        assert r2["ok"] == 0, r2
+        assert "靶机 ?" not in r2["failed"][0]["reason"], r2["failed"]
+        assert mock_server.host in r2["failed"][0]["reason"], r2["failed"]
+    finally:
+        lm.release(host_port, LockClass.CAPTURE, ("/tmp/occupied.pcap",))
+
+
+def test_boce_error_failed(app, mock_server):
+    # N1: 服务端 131 失败 {"error":...} -> failed 而非 ok:1
+    mock_server.boce_error = True
+    res = boce_run([mock_server.host], "http://example.com", port=mock_server.port)
+    mock_server.boce_error = False
+    assert res["ok"] == 0, res
+    assert "boce failed" in res["failed"][0]["reason"], res
+    assert "chromium" in res["failed"][0]["reason"], res

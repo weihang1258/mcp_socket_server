@@ -135,6 +135,11 @@ class _Handler(socketserver.BaseRequestHandler):
             return json.dumps({"version": VERSION, "repo": "mock",
                                "latest_version": VERSION, "has_upgrade": False}).encode()
         if datatype == 5:
+            # 1.7.2 N3: error 优先(capture_start_error 开关,实时读);其次 fail 形态(无 error)
+            err = getattr(self.server, "capture_start_error", None)
+            if err:
+                return json.dumps({"res": False, "error": err},
+                                  ensure_ascii=False).encode()
             if getattr(self.server, "capture_start_mode", "ok") == "fail":
                 return json.dumps({"res": False}).encode()
             return json.dumps({"res": True}).encode()
@@ -194,6 +199,9 @@ class _Handler(socketserver.BaseRequestHandler):
             gz = _compress(res)
             return struct.pack("i", len(gz)) + gz
         if datatype == 131:
+            if getattr(self.server, "boce_error", False):
+                res = json.dumps({"error": "chromium依赖库安装失败: mock"}).encode()
+                return struct.pack("i", len(res)) + res
             res = json.dumps({"status": "ok", "url": json.loads(data).get("url")}).encode()
             return struct.pack("i", len(res)) + res
         if datatype == 3:
@@ -221,6 +229,8 @@ class MockSocketServer:
     listen_pid_mode = "ok"  # 171 start pid 开关:"ok"|"empty"(171 返回 {"pid":[]})
     capture_stop_mode = "new_ok"  # 6 停止形态:"new_ok"/"new_never"/"new_fail"/"legacy_ok"/"legacy_fail"
     capture_start_mode = "ok"  # 5 开启形态:"ok"|"fail"(5 返回 {"res":false} 业务失败)
+    capture_start_error = None  # 5 失败原因(1.7.2 N3):非 None 时 5 返回 {"res":false,"error":...}
+    boce_error = False  # 131 形态开关:False=成功;True=返回 {"error":...}(N1 桥判失败)
     captured_payload = None  # datatype 0 最近一次 wire payload(handler 写,测试读)
     listen_active_port = None  # 171 活跃监听端口;None=未监听(端口不一致 -> error JSON)
 
@@ -233,7 +243,8 @@ class MockSocketServer:
     def __setattr__(self, name, value):
         # handler 经 self.server(TCPServer) 读开关/写回执,运行时赋值需同步过去
         if name in ("listen_mode", "replay_mode", "listen_pid_mode",
-                    "capture_stop_mode", "capture_start_mode"):
+                    "capture_stop_mode", "capture_start_mode",
+                    "capture_start_error", "boce_error"):
             srv = self.__dict__.get("_srv")
             if srv is not None:
                 setattr(srv, name, value)
@@ -270,6 +281,10 @@ class MockSocketServer:
         self._srv.listen_pid_mode = self.listen_pid_mode
         self._srv.capture_stop_mode = self.capture_stop_mode
         self._srv.capture_start_mode = self.capture_start_mode
+        self._srv.capture_start_error = self.capture_start_error
+        self._srv.boce_error = self.boce_error
+        self._srv.capture_start_error = self.capture_start_error
+        self._srv.boce_error = self.boce_error
         self.port = self._srv.server_address[1]
         self._thread = threading.Thread(target=self._srv.serve_forever, daemon=True)
         self._thread.start()

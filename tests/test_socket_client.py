@@ -205,3 +205,43 @@ def test_replay_force_port_zero_omitted(mock_server):
         assert payload.get("force_sport") == 12345, payload
     finally:
         c.close()
+
+
+def test_decode_listen_error():
+    # B09/N4: 172/173/175 错误 JSON 解码;1.6.x 裁形态与解不出 JSON 的原文兜底
+    from mcp_socket_server.socket_client import SocketServerClient
+    f = SocketServerClient._decode_listen_error
+    assert f('{"error": "未启动监听"}'.encode("utf-8")) == "未启动监听"
+    assert f(b'error') == 'error'
+    assert f(b'garbage{{') == 'garbage{{'
+
+
+def test_boce_error_failed(mock_server):
+    # N1: 服务端 131 前置失败 {"error":...} -> client 判失败抛错(不再透传 dict 计 ok)
+    from mcp_socket_server.socket_client import SocketServerClient
+    mock_server.boce_error = True
+    c = SocketServerClient(mock_server.host, mock_server.port)
+    c.connect()
+    try:
+        try:
+            c.boce_run("http://example.com")
+            assert False, "should raise"
+        except ConnectionError as e:
+            assert "boce failed" in str(e) and "chromium" in str(e), e
+    finally:
+        c.close()
+        mock_server.boce_error = False
+
+
+def test_capture_start_error_passthrough(mock_server):
+    # N3: 1.7.2 服务端 dt5 失败带原因 -> client 返回 dict 保留 error 供工具层透传
+    from mcp_socket_server.socket_client import SocketServerClient
+    mock_server.capture_start_error = "路径不可写: /nonexist/x.pcap"
+    c = SocketServerClient(mock_server.host, mock_server.port)
+    c.connect()
+    try:
+        d = c.capture_start(eth="eth0", path="/tmp/err.pcap")
+        assert d["res"] is False and "路径不可写" in d["error"], d
+    finally:
+        c.close()
+        mock_server.capture_start_error = None
