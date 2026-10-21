@@ -14,6 +14,7 @@ DEFAULTS: dict[str, Any] = {
     "behind_proxy": False,
     "audit_retention_days": 90,
     "download_dir": "./downloads",
+    "proxy": "",   # 中央下载 GitHub 升级包用，如 http://10.12.186.204:7897；留空=直连
     "log_level": "INFO",
     "default_timeout": 30,
     "pool": {"max_conn_per_target": 5, "idle_timeout": 600,
@@ -30,6 +31,7 @@ class Config:
     behind_proxy: bool
     audit_retention_days: int
     download_dir: str
+    proxy: str
     log_level: str
     default_timeout: int
     pool: dict
@@ -62,7 +64,9 @@ def load_config(path: str | None = None) -> Config:
     return Config(host=b["host"], port=b["port"], db_path=data["db_path"],
                   behind_proxy=data["behind_proxy"],
                   audit_retention_days=data["audit_retention_days"],
-                  download_dir=data["download_dir"], log_level=data["log_level"],
+                  download_dir=data["download_dir"],
+                  proxy=data["proxy"],
+                  log_level=data["log_level"],
                   default_timeout=data["default_timeout"],
                   pool=data["pool"],
                   cmd_exec_whitelist=data["cmd_exec_whitelist"])

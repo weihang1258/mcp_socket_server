@@ -118,7 +118,7 @@ class _Handler(socketserver.BaseRequestHandler):
     def _on_data(self, datatype, data):
         # 只读类:原始 JSON(无长度前缀)
         if datatype == 14:
-            return json.dumps(VERSION).encode()
+            return json.dumps(getattr(self.server, "mock_version", VERSION)).encode()
         if datatype == 7:
             return json.dumps({"res": os.path.isfile(json.loads(data)["file"])}).encode()
         if datatype == 8:
@@ -220,6 +220,16 @@ class _Handler(socketserver.BaseRequestHandler):
             return struct.pack("<Q", len(content)) + content
         if datatype in (15, 172, 173):
             return b"ok"
+        if datatype == 20:
+            # 升级落地(1.8.0):upgrade_mode=="error" 时回 error(推包缺失形态);
+            # 否则回 {"ok":true,"version":...}(不真重启,轮询确认靠 mock_version=dt14)
+            req = json.loads(data)
+            if getattr(self.server, "upgrade_mode", "ok") == "error":
+                return json.dumps(
+                    {"error": "未找到推送的升级包: /opt/socket/versions/%s/.staging/socket_server"
+                              % req.get("version")},
+                    ensure_ascii=False).encode()
+            return json.dumps({"ok": True, "version": req.get("version")}).encode()
         return None
 
 
@@ -233,6 +243,8 @@ class MockSocketServer:
     boce_error = False  # 131 形态开关:False=成功;True=返回 {"error":...}(N1 桥判失败)
     captured_payload = None  # datatype 0 最近一次 wire payload(handler 写,测试读)
     listen_active_port = None  # 171 活跃监听端口;None=未监听(端口不一致 -> error JSON)
+    mock_version = "1.7.1"  # dt14 版本号(0.3.0 upgrade_run 预检/轮询确认用,测试可切)
+    upgrade_mode = "ok"  # 20 升级落地形态开关:"ok"|"error"(error=推包缺失)
 
     def __init__(self):
         self._srv = None
@@ -244,7 +256,8 @@ class MockSocketServer:
         # handler 经 self.server(TCPServer) 读开关/写回执,运行时赋值需同步过去
         if name in ("listen_mode", "replay_mode", "listen_pid_mode",
                     "capture_stop_mode", "capture_start_mode",
-                    "capture_start_error", "boce_error"):
+                    "capture_start_error", "boce_error",
+                    "mock_version", "upgrade_mode"):
             srv = self.__dict__.get("_srv")
             if srv is not None:
                 setattr(srv, name, value)
@@ -283,6 +296,8 @@ class MockSocketServer:
         self._srv.capture_start_mode = self.capture_start_mode
         self._srv.capture_start_error = self.capture_start_error
         self._srv.boce_error = self.boce_error
+        self._srv.mock_version = self.mock_version
+        self._srv.upgrade_mode = self.upgrade_mode
         self.port = self._srv.server_address[1]
         self._thread = threading.Thread(target=self._srv.serve_forever, daemon=True)
         self._thread.start()

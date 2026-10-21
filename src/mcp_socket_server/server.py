@@ -20,6 +20,10 @@ from .commands import LockClass
 from .locks import LockConflict, LockManager, get_lock_manager
 from .pool import TargetResult, get_scheduler
 from .registry import get_registry
+from .socket_client import SocketServerClient
+from .upgrades import (ensure_release_binary, fetch_latest_version,
+                       push_binary, start_daily_check,
+                       version_ok as _upgrade_version_ok)
 
 logger = logging.getLogger(__name__)
 
@@ -92,24 +96,32 @@ mcp = FastMCP("mcp-socket-server",
                   enable_dns_rebinding_protection=False))
 # N5: FastMCP 1.28 不透传 version 到 initialize 的 serverInfo(回落 mcp SDK 版本),
 # 构造后直设底层 Server.version,让客户端可辨识桥版本
-mcp._mcp_server.version = "0.2.7"
+mcp._mcp_server.version = "0.3.0"
 
 _lock_manager: Optional[LockManager] = None
 _registry: Any = None
 _audit_logger: Any = None
 _cmd_whitelist: list[str] = []
+# 升级编排(upgrade_run)所需配置,init_server 落地
+_cfg_download_dir = "./downloads"
+_cfg_proxy: Optional[str] = None
 
 
 def init_server(cfg) -> None:
     """初始化 registry/locks/audit + 日志级别。config.yaml 的 db_path 用于所有 SQLite。"""
     global _lock_manager, _registry, _audit_logger, _cmd_whitelist
+    global _cfg_download_dir, _cfg_proxy
     _setup_logging(cfg.log_level)
     _lock_manager = get_lock_manager()
     _registry = get_registry(cfg.db_path)
     _audit_logger = get_audit(cfg.db_path, cfg.audit_retention_days)
     _cmd_whitelist = list(cfg.cmd_exec_whitelist or [])
+    _cfg_download_dir = cfg.download_dir
+    _cfg_proxy = (cfg.proxy or "").strip() or None
+    start_daily_check(_cfg_proxy, lambda: mcp._mcp_server.version)
     logger.info(f"init_server: db={cfg.db_path} bind={cfg.host}:{cfg.port} "
-                f"log_level={cfg.log_level} whitelist={_cmd_whitelist}")
+                f"log_level={cfg.log_level} whitelist={_cmd_whitelist} "
+                f"download_dir={_cfg_download_dir} proxy={_cfg_proxy or '(直连)'}")
 
 
 def _resolve_targets(raw_targets: list[str]) -> list[str]:
@@ -607,6 +619,123 @@ def socket_listen(targets: Targets, action: ActionParam, listen_port: ListenPort
                       audit_params={"action": action, "listen_port": listen_port,
                                     "file": file, "max_bytes": max_bytes},
                       timeout=timeout)
+
+UpgradeVersionParam = Annotated[str, Field(
+    description="目标版本号如 1.8.0;留空=自动查 GitHub 最新版(失败可显式指定重试)")]
+UpgradeForceParam = Annotated[bool, Field(
+    description="true=靶机有其它客户端连接时强制升级(会带着连接重启);默认 false=拒绝")]
+
+
+@mcp.tool(annotations={"destructiveHint": True})
+def upgrade_run(targets: Targets, version: UpgradeVersionParam = "",
+                force: UpgradeForceParam = False, port: PortParam = 9000,
+                timeout: ToolTimeout = 60,
+                description: CallDescription = "") -> dict:
+    """升级靶机 socket_server（需靶机 1.8.0+，旧靶机请先用 install.sh 安装）。
+    流程:确定版本(指定则零查询/留空查最新)→中央下载→经 :9001 推包→dt20 校验落盘→后台重启→轮询 dt14 确认。
+    升级期间靶机服务重启约 5-15 秒不可用;非 force 且靶机有其它客户端连接时靶机拒绝。"""
+    t0 = time.monotonic()
+    resolved = _resolve_targets(targets)
+    if not resolved:
+        return {"ok": 0, "version": version,
+                "failed": [{"target": t, "reason": "无有效靶机"} for t in targets],
+                "results": []}
+    # 1) 确定目标版本：指定则零查询（不阻塞），留空才查一次最新
+    ver = version.strip().lstrip("v")
+    if ver:
+        if not _upgrade_version_ok(ver):
+            return {"ok": 0, "version": ver,
+                    "failed": [{"target": "*", "reason": f"版本号非法: {ver!r}"}],
+                    "results": []}
+    else:
+        ver = fetch_latest_version(_cfg_proxy)
+        if not ver:
+            return {"ok": 0, "version": "",
+                    "failed": [{"target": "*",
+                                "reason": "查询最新版失败（GitHub 不可达），可显式指定 version 重试"}],
+                    "results": []}
+    # 2) 中央下载一次，多靶机共用（已存在则复用，幂等）
+    binary, sha = ensure_release_binary(ver, _cfg_download_dir, _cfg_proxy)
+    if not binary:
+        return {"ok": 0, "version": ver,
+                "failed": [{"target": "*", "reason": sha}], "results": []}
+    logger.info(f"upgrade_run: v{ver} sha={sha[:16]}... binary={binary} targets={resolved}")
+
+    def run_one(client):
+        # 预检：dt20 仅 1.8.0+ 靶机支持
+        cur = client.version()
+        try:
+            parts = tuple(int(x) for x in str(cur).split(".")[:3])
+        except ValueError:
+            return {"_error": f"靶机版本号异常: {cur!r}"}
+        if parts < (1, 8, 0):
+            return {"_error": f"靶机 v{cur} 过旧，请先用 install.sh 安装 1.8.0+"}
+        ok, err = push_binary(client.host, binary, ver)
+        if not ok:
+            return {"_error": err}
+        resp = client.upgrade_apply(ver, sha, force)
+        if resp.get("error"):
+            return {"_error": resp["error"]}
+        if not resp.get("ok"):
+            return {"_error": f"无法解析的 dt20 响应: {resp!r}"}
+        # 服务即将重启：close 后归还，池下次 acquire 自动重连，不复用垂死连接
+        client.close()
+        return {"pushed": True, "from_version": str(cur)}
+
+    batch = _run_batch(resolved, port, run_one, lock_class=LockClass.SYSTEM,
+                       audit_params={"version": ver, "force": force},
+                       timeout=timeout)
+    # 3) 轮询 dt14 确认新版本已生效。窗口 180s：靶机未设 SO_REUSEADDR，停服后
+    #    :9000 要等旧连接 TIME_WAIT 自然释放（实测可超 90s），systemd 每 5s 重试绑定
+    pushed = [r for r in batch.get("results", []) if r.get("pushed")]
+    confirmed: set[str] = set()
+    if pushed:
+        deadline = time.time() + 180
+        pending = []
+        for r in pushed:
+            # resolve 约定:target 是纯 host(端口由工具 port 参数控制);
+            # "host:9100" 形态仅当冒号后全数字才按端口拆(同 registry.resolve)
+            host, sep, p = r["target"].rpartition(":")
+            pending.append((r["target"], host if sep and p.isdigit() else r["target"],
+                            int(p) if sep and p.isdigit() else port))
+        while pending and time.time() < deadline:
+            time.sleep(3)
+            for item in list(pending):
+                t, host, p = item
+                try:
+                    c = SocketServerClient(host, p, timeout=5)
+                    c.connect()
+                    v = c.version()
+                    c.close()
+                except Exception:
+                    continue  # 重启中，下轮再试
+                if v == ver:
+                    confirmed.add(t)
+                    pending.remove(item)
+    # 4) 汇总（终态审计：含轮询确认结果，而非仅推送受理结果）
+    results, failed = [], list(batch["failed"])
+    for r in pushed:
+        if r["target"] in confirmed:
+            results.append({"target": r["target"], "upgraded": True,
+                            "version": ver, "from_version": r.get("from_version")})
+        else:
+            failed.append({"target": r["target"],
+                           "reason": "推送已受理但 180 秒内未确认到新版本"
+                                     "（端口未释放/重启异常），请查靶机日志 /var/log/socket_server.log"})
+    if _audit_logger is not None:
+        try:
+            outcomes = [{"target": r["target"], "ok": True} for r in results] + \
+                       [{"target": f["target"], "ok": False} for f in failed if f["target"] != "*"]
+            _audit_logger.write("upgrade_run", {"version": ver, "force": force},
+                                outcomes, ok_count=len(results),
+                                failed_count=len(outcomes) - len(results),
+                                duration_ms=int((time.monotonic() - t0) * 1000),
+                                source_ip="internal")
+        except Exception:
+            pass
+    return {"ok": len(results), "version": ver, "failed": failed, "results": results,
+            "duration_ms": int((time.monotonic() - t0) * 1000)}
+
 
 def main() -> None:
     """stdio 模式(本地)。远程用 __main__.main -> transport.run(Streamable HTTP)。"""

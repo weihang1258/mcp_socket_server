@@ -339,3 +339,19 @@ class SocketServerClient:
             content = self._recv_n(candidate_len)
             return decompress_gzip(content)
         raise ValueError(f"unknown action: {action}")
+
+    def upgrade_apply(self, version: str, sha256: str, force: bool = False) -> dict:
+        """datatype 20 (1.8.0+):中央推包后的升级落地指令。
+
+        前置:二进制已经 :9001 推到靶机 versions/<version>/.staging/。
+        同步返回终态:{"ok": True, "version": ...} 或 {"error": "原因"}
+        (版本非法/sha 不符/autoupgrade=off/升级进行中/有其它客户端且非 force)。
+        受理后靶机在后台重启生效——调用方随后应轮询 dt14 确认,并避免复用本连接
+        (服务重启,连接即死;建议 close 后归还)。
+        """
+        payload = {"version": version, "sha256": sha256, "force": force}
+        self._send(20, json.dumps(payload).encode())
+        data = json.loads(self.recv_text_response().decode("utf-8", "replace"))
+        if not isinstance(data, dict):
+            return {"error": f"无法解析的 dt20 响应: {data!r}"}
+        return data

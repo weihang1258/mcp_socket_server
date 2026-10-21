@@ -62,6 +62,10 @@ COMMANDS: dict[str, CommandSpec] = {
 
     # 拨测
     "boce_run":          CommandSpec("boce_run", 131, LockClass.BROWSER, Danger.WRITE),
+
+    # 升级下发编排(socket_server 1.8.0+):中央下载 -> :9001 推包 -> dt20 落地 -> 轮询确认。
+    # 危险级 DANGER 对齐既有约定(版本切换需二次确认);SYSTEM 锁靶机排他。
+    "upgrade_run":       CommandSpec("upgrade_run", 20, LockClass.SYSTEM, Danger.DANGER),
 }
 # 下期:replay(0)/mtu(10)/unzip(15)/python_cmd(16)/socketserver_*(171-174)/
 #        dpi_mode_switch+dpi_upgrade(cmd 编排)/tap_mirror(SSH)
