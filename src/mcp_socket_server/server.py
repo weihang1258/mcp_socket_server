@@ -96,7 +96,7 @@ mcp = FastMCP("mcp-socket-server",
                   enable_dns_rebinding_protection=False))
 # N5: FastMCP 1.28 不透传 version 到 initialize 的 serverInfo(回落 mcp SDK 版本),
 # 构造后直设底层 Server.version,让客户端可辨识桥版本
-mcp._mcp_server.version = "0.3.0"
+mcp._mcp_server.version = "0.3.1"
 
 _lock_manager: Optional[LockManager] = None
 _registry: Any = None
@@ -296,6 +296,19 @@ def remove_target(host: HostParam, port: PortParam = 9000,
     if _registry is not None and _registry.get_listen_liveness(host, port):
         return {"ok": False, "error": f"靶机 {host} 有活跃监听，请先 socket_listen action=stop"}
     return _registry.remove_target(host, port)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def version(targets: Targets, port: PortParam = 9000,
+            timeout: ToolTimeout = 15,
+            description: CallDescription = "") -> dict:
+    """查询靶机 socket_server 版本号(datatype 14,只读)。
+    升级前先调本工具确认各靶机现版本，再决定调 upgrade_run 升到哪个版本。"""
+    resolved = _resolve_targets(targets)
+    results = get_scheduler().batch(resolved, lambda c: c.version(), port=port, timeout=timeout)
+    return {"ok": sum(1 for r in results if r.ok),
+            "failed": _failed(results),
+            "results": [{"target": r.target, "version": r.data} for r in results if r.ok]}
 
 
 @mcp.tool(annotations={"readOnlyHint": True})

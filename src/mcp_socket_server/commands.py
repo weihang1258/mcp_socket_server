@@ -49,6 +49,7 @@ class CommandSpec:
 
 COMMANDS: dict[str, CommandSpec] = {
     # 只读类(NONE/SAFE)
+    "version":           CommandSpec("version", 14, LockClass.NONE, Danger.SAFE),
     "isfile":            CommandSpec("isfile", 7, LockClass.NONE, Danger.SAFE),
     "isdir":             CommandSpec("isdir", 8, LockClass.NONE, Danger.SAFE),
     "pcap_flow_extract": CommandSpec("pcap_flow_extract", 200, LockClass.NONE, Danger.SAFE),

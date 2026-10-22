@@ -3,7 +3,13 @@ from mcp_socket_server.server import (
     isdir,
     isfile,
     pcap_flow_extract,
+    version,
 )
+
+def test_version_tool(mock_server, tmp_path):
+    mock_server.mock_version = "1.8.0"
+    r = version([mock_server.host], port=mock_server.port)
+    assert r["ok"] == 1 and r["results"][0]["version"] == "1.8.0", r
 
 
 def test_isfile_and_isdir_tools(mock_server, tmp_path):
