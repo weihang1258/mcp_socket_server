@@ -19,9 +19,20 @@ def test_file_transfer_guidance_tool(mock_server):
     assert r["ok"] == 1, r
     c = r["commands"][0]
     assert c["target"] == mock_server.host
+    # 裸 host 不得丢失(回归: rpartition 对无冒号 target 会清空 host)
+    assert f"http://{mock_server.host}:9001/" in c["download"], c["download"]
+    assert f"http://{mock_server.host}:9001/files" in c["upload"], c["upload"]
     assert "curl -o " in c["download"] and ":9001/files?path=" in c["download"]
     assert "curl -F" in c["upload"] and ":9001/files" in c["upload"]
     assert "ssh" not in c["download"].lower()
+
+
+def test_file_transfer_host_port_form():
+    # "host:port" 形态:剥端口取 host,IPv6 裸地址加方括号
+    r = file_transfer(["10.0.0.1:9100", "fd00::5"], http_port=9001)
+    by = {c["target"]: c for c in r["commands"]}
+    assert "http://10.0.0.1:9001/" in by["10.0.0.1:9100"]["download"]
+    assert "http://[fd00::5]:9001/" in by["fd00::5"]["upload"]
 
 
 def test_isfile_and_isdir_tools(mock_server, tmp_path):

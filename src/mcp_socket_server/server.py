@@ -326,7 +326,14 @@ def file_transfer(targets: Targets, http_port: PortParam = 9001,
     resolved = _resolve_targets(targets)
     cmds = []
     for t in resolved:
-        host, sep, p = t.rpartition(":")
+        # host:port 拆分:恰一个冒号且冒号后全数字才算端口;多冒号=裸 IPv6
+        # (裸 IPv6 尾段可能恰是数字,如 fd00::5,不能按 rpartition 冒号拆)
+        if t.startswith("[") and "]:" in t:
+            host = t.split("]:", 1)[0].lstrip("[")  # [v6]:port -> v6
+        elif t.count(":") == 1 and t.rsplit(":", 1)[1].isdigit():
+            host = t.rsplit(":", 1)[0]
+        else:
+            host = t
         h6 = f"[{host}]" if ":" in host else host  # IPv6 裸地址加方括号
         cmds.append({
             "target": t,

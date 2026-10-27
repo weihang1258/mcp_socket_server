@@ -214,10 +214,11 @@ def test_results_carry_target(app, mock_server):
 
 
 def test_cmd_exec_wait_false_note(app, mock_server):
-    # B18: wait=False -> note 而非 null
+    # B18: wait=False -> note 而非 null(0.3.2 起 note 文案说明无回显原因)
     res = cmd_exec([mock_server.host], "echo hi", port=mock_server.port, wait=False)
     assert res["ok"] == 1, res
-    assert res["results"][0].get("note") == "wait=false 无返回值", res
+    note = res["results"][0].get("note", "")
+    assert "wait=false" in note and "wait=true" in note, res
 
 
 def test_remove_target_with_listener_rejected(app, mock_server):
