@@ -10,3 +10,11 @@ dist/
 .superpowers/
 config.yaml
 scratch/
+downloads/
+mcp_socket_server.db*
+dpi.py
+dpi_constants.py
+hengwei.py
+socket_linux.py
+tcpdump.py
+webvisit.py
