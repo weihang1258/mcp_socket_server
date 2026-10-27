@@ -96,7 +96,7 @@ mcp = FastMCP("mcp-socket-server",
                   enable_dns_rebinding_protection=False))
 # N5: FastMCP 1.28 不透传 version 到 initialize 的 serverInfo(回落 mcp SDK 版本),
 # 构造后直设底层 Server.version,让客户端可辨识桥版本
-mcp._mcp_server.version = "0.3.1"
+mcp._mcp_server.version = "0.3.2"
 
 _lock_manager: Optional[LockManager] = None
 _registry: Any = None
@@ -201,7 +201,7 @@ def _run_batch(
                 return TargetResult(target=host_port, ok=False,
                                     error=str(data["_error"]))
             if data is None:
-                data = {"note": "wait=false 无返回值"}   # B18
+                data = {"note": "wait=false 为异步执行不返回回显;需要 stdout 请 wait=true"}   # B18
             elif data is False:
                 ok = False                                # B23/B04
                 return TargetResult(target=host_port, ok=False,
@@ -312,14 +312,40 @@ def version(targets: Targets, port: PortParam = 9000,
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
+def file_transfer(targets: Targets, http_port: PortParam = 9001,
+                  description: CallDescription = "") -> dict:
+    """获取客户端与靶机之间点对点传文件的命令(零网络调用,纯指引)。
+    客户端本地文件无法经本 MCP 中转到靶机(MCP 运行在远端中央服务器,拿不到客户端
+    本地文件),必须客户端直连靶机 :9001 HTTP 文件服务,上传下载均用 curl:
+    下载 curl -o 本地文件 "http://<靶机IP>:9001/files?path=<远端绝对路径>"
+    上传 curl -F "path=<远端绝对路径>" -F "file=@本地文件" http://<靶机IP>:9001/files
+    大小不限(1.8.2 起靶机流式收发,GB 级不 OOM;1.8.1 及更早整载内存,仅建议 MB 级)。
+    警示:把脚本/大段内容放到靶机务必走上传,勿经 ssh 命令行内嵌长内容
+    (Windows ssh.exe >8K 会被随机截断损坏);上传后需执行权限接 cmd_exec chmod +x。
+    9001 拒绝连接=靶机 http_port=0(配置关闭)或版本 <1.7.0,先 upgrade_run 升级。"""
+    resolved = _resolve_targets(targets)
+    cmds = []
+    for t in resolved:
+        host, sep, p = t.rpartition(":")
+        h6 = f"[{host}]" if ":" in host else host  # IPv6 裸地址加方括号
+        cmds.append({
+            "target": t,
+            "download": f'curl -o 本地文件 "http://{h6}:{http_port}/files?path=<远端绝对路径>"',
+            "upload": f'curl -F "path=<远端绝对路径>" -F "file=@本地文件" http://{h6}:{http_port}/files',
+        })
+    if not cmds:
+        return {"ok": 0, "note": "无已注册靶机,先 add_target 注册再用",
+                "usage": ["下载: curl -o 本地文件 \"http://<靶机IP>:9001/files?path=<远端绝对路径>\"",
+                          "上传: curl -F \"path=<远端绝对路径>\" -F \"file=@本地文件\" http://<靶机IP>:9001/files"]}
+    return {"ok": len(cmds), "commands": cmds}
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
 def isfile(targets: Targets, path: PathParam, port: PortParam = 9000,
            timeout: ToolTimeout = 15,
            description: CallDescription = "") -> dict:
     """检查靶机文件是否存在(datatype 7,只读)。
-    文件传输用靶机 HTTP 服务(:9001,与 TCP 9000 不同端口):
-    下载 curl -o out.pcap "http://<host>:9001/files?path=<远端路径>"
-    上传 curl -F "path=<远端路径>" -F "file=@本地文件" http://<host>:9001/files
-    host 即 targets 里注册的 IP(IPv6 加方括号);若 9001 拒绝连接,说明该靶机未升级到 1.7.0。"""
+    文件内容的上传下载用 file_transfer 工具(返回点对点直传命令)。"""
     resolved = _resolve_targets(targets)
     results = get_scheduler().batch(resolved, lambda c: c.isfile(path), port=port, timeout=timeout)
     return {"ok": sum(1 for r in results if r.ok),
@@ -343,8 +369,8 @@ def isdir(targets: Targets, path: PathParam, port: PortParam = 9000,
 def pcap_flow_extract(targets: Targets, pcap_dir: PcapDirParam, port: PortParam = 9000,
                       timeout: ToolTimeout = 30,
                       description: CallDescription = "") -> dict:
-    """提取 pcap 五元组流(datatype 200,只读)。pcap 可先经 HTTP 下载到本地分析:
-    curl -o out.pcap "http://<host>:9001/files?path=<pcap 路径>"。
+    """提取 pcap 五元组流(datatype 200,只读)。pcap 可先经 file_transfer 工具
+    给出的命令下载到本地分析(靶机 :9001 点对点直传)。
     路径不存在/非目录返回空数组；protoType: 1=TCP 2=UDP 4=ICMP。"""
     resolved = _resolve_targets(targets)
     results = get_scheduler().batch(resolved, lambda c: c.pcap_flow_extract(pcap_dir),
@@ -370,7 +396,10 @@ def cmd_exec(targets: Targets, args: CmdArgs, cwd: CwdParam = "", env: EnvParam 
              timeout: ToolTimeout = 60,
              description: CallDescription = "") -> dict:
     """执行命令(datatype 1,SHELL/DANGER,白名单校验后转发)。
-    白名单为空=不限制（默认）；wait=false 无返回值（返回 note）。"""
+    返回 {code,stdout,stderr};wait=false 为异步执行不返回回显(需要回显必须 wait=true);
+    stdout 超 64KB 截断(带 stdout_truncated 标记)。
+    把脚本/大段内容放到靶机勿经命令内嵌(ssh.exe >8K 会截断),调 file_transfer 获取上传命令。
+    白名单为空=不限制（默认）。"""
     logger.info(f"cmd_exec CALLED: targets={targets} port={port} wait={wait} "
                 f"args={args[:120]!r}")
     # 白名单校验
